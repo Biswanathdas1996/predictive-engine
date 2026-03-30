@@ -1,17 +1,181 @@
-import { useListSimulations, useListAgents, useGetMonteCarloRuns } from "@workspace/api-client-react";
-import { Activity, Users, BarChart2, TrendingUp, ArrowRight } from "lucide-react";
+import {
+  useListSimulations,
+  useListAgents,
+  useGetServiceStatus,
+  getGetServiceStatusQueryKey,
+  type Agent,
+  type ServiceStatus,
+  type Simulation,
+} from "@workspace/api-client-react";
+import {
+  Activity,
+  Users,
+  TrendingUp,
+  ArrowRight,
+  Server,
+  Database,
+  Share2,
+  Sparkles,
+  type LucideIcon,
+} from "lucide-react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
+import { normalizeApiArray } from "@/lib/utils";
+
+type StatusTone = "ok" | "warn" | "error" | "muted" | "loading";
+
+function statusTone(tone: StatusTone): string {
+  switch (tone) {
+    case "ok":
+      return "text-emerald-400";
+    case "warn":
+      return "text-amber-400";
+    case "error":
+      return "text-red-400";
+    case "muted":
+      return "text-muted-foreground";
+    default:
+      return "text-muted-foreground animate-pulse";
+  }
+}
+
+function ConnectionCell(props: {
+  label: string;
+  detail: string;
+  subDetail?: string;
+  tone: StatusTone;
+  icon: LucideIcon;
+}) {
+  const Icon = props.icon;
+  return (
+    <div className="flex items-start gap-2.5 rounded-xl bg-background/50 px-3 py-2.5 border border-border/40">
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+      <div className="min-w-0">
+        <p className="text-xs text-muted-foreground">{props.label}</p>
+        <p className={`text-sm font-medium truncate ${statusTone(props.tone)}`}>
+          {props.detail}
+        </p>
+        {props.subDetail ? (
+          <p className="text-xs text-muted-foreground truncate mt-0.5">{props.subDetail}</p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function statusDotClass(tone: StatusTone): string {
+  switch (tone) {
+    case "ok":
+      return "bg-emerald-500 shadow-[0_0_8px_rgba(52,211,153,0.5)]";
+    case "warn":
+      return "bg-amber-500";
+    case "error":
+      return "bg-red-500";
+    case "muted":
+      return "bg-muted-foreground/40";
+    default:
+      return "bg-muted-foreground/30 animate-pulse";
+  }
+}
+
+function connectionToneFor(
+  s: ServiceStatus | undefined,
+  key: "api" | "database" | "neo4j" | "llm",
+  unreachable: boolean,
+  loading: boolean,
+  apiError: boolean,
+): StatusTone {
+  if (key === "api") {
+    if (apiError) return "error";
+    if (loading) return "loading";
+    return "ok";
+  }
+  if (unreachable) return "muted";
+  if (loading) return "loading";
+  if (!s) return "muted";
+  if (key === "database") return s.database === "connected" ? "ok" : "error";
+  if (key === "neo4j") {
+    if (s.neo4j === "connected") return "ok";
+    if (s.neo4j === "disabled") return "muted";
+    return "error";
+  }
+  return s.llm === "available" ? "ok" : "warn";
+}
+
+function llmSubDetail(s: ServiceStatus | undefined): string | undefined {
+  if (!s || s.llm !== "available") return undefined;
+  const backend =
+    s.llmBackend === "ollama"
+      ? "Ollama"
+      : s.llmBackend === "openai_compatible"
+        ? "OpenAI-compatible"
+        : "LLM";
+  if (s.llmModel) return `${backend} · ${s.llmModel}`;
+  return backend;
+}
+
+function HeaderStatusStrip(props: {
+  s: ServiceStatus | undefined;
+  loading: boolean;
+  unreachable: boolean;
+  apiError: boolean;
+}) {
+  const { s, loading, unreachable, apiError } = props;
+  const rows: { key: string; label: string; k: "api" | "database" | "neo4j" | "llm" }[] = [
+    { key: "api", label: "API", k: "api" },
+    { key: "db", label: "DB", k: "database" },
+    { key: "neo4j", label: "Neo4j", k: "neo4j" },
+    { key: "llm", label: "LLM", k: "llm" },
+  ];
+  return (
+    <div
+      className="rounded-xl border border-border/50 bg-card/70 px-3 py-2.5 backdrop-blur-sm"
+      aria-live="polite"
+    >
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+        System status
+      </p>
+      <div className="flex flex-wrap gap-x-4 gap-y-2">
+        {rows.map((row) => (
+          <div key={row.key} className="flex items-center gap-1.5">
+            <span
+              className={`h-2 w-2 shrink-0 rounded-full ${statusDotClass(
+                connectionToneFor(s, row.k, unreachable, loading, apiError),
+              )}`}
+              title={row.label}
+            />
+            <span className="text-xs text-foreground/90">{row.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const { data: simulations, isLoading: isLoadingSims } = useListSimulations();
   const { data: agents, isLoading: isLoadingAgents } = useListAgents();
+  const {
+    data: serviceStatus,
+    isLoading: statusLoading,
+    isError: statusError,
+  } = useGetServiceStatus({
+    query: {
+      queryKey: getGetServiceStatusQueryKey(),
+      refetchInterval: 30_000,
+      retry: 1,
+    },
+  });
+  const statusUnreachable = statusError;
+
+  const simRows = normalizeApiArray<Simulation>(simulations);
+  const agentRows = normalizeApiArray<Agent>(agents);
 
   // Aggregate metrics
-  const activeSims = simulations?.filter(s => s.status !== 'completed').length || 0;
-  const totalAgents = agents?.length || 0;
-  const avgSupport = agents?.length 
-    ? agents.reduce((acc, a) => acc + a.beliefState.policySupport, 0) / agents.length 
+  const activeSims = simRows.filter((s) => s.status !== "completed").length;
+  const totalAgents = agentRows.length;
+  const avgSupport = agentRows.length
+    ? agentRows.reduce((acc, a) => acc + a.beliefState.policySupport, 0) / agentRows.length
     : 0;
 
   const container = {
@@ -24,16 +188,129 @@ export default function Dashboard() {
 
   const item = {
     hidden: { opacity: 0, y: 20 },
-    show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } }
+    show: { opacity: 1, y: 0, transition: { type: "spring" as const, stiffness: 300, damping: 24 } }
   };
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-white/60">
-          Engine Overview
-        </h1>
-        <p className="text-muted-foreground mt-2">Real-time intelligence from active policy simulations.</p>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h1 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-white to-white/60">
+            Engine Overview
+          </h1>
+          <p className="text-muted-foreground mt-2">
+            Real-time intelligence from active policy simulations.
+          </p>
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span>
+              <span className="text-foreground/80 font-medium">Data:</span>{" "}
+              {isLoadingSims ? "Loading simulations…" : `${simRows.length} simulation${simRows.length === 1 ? "" : "s"}`}
+              {" · "}
+              {isLoadingAgents ? "loading agents…" : `${agentRows.length} agent${agentRows.length === 1 ? "" : "s"}`}
+            </span>
+          </div>
+        </div>
+        <HeaderStatusStrip
+          s={serviceStatus}
+          loading={statusLoading}
+          unreachable={statusUnreachable}
+          apiError={statusError}
+        />
+      </div>
+
+      <div className="rounded-2xl border border-border/50 bg-card/80 p-4 md:p-5 shadow-sm">
+        <h2 className="text-sm font-semibold text-foreground mb-3 tracking-tight">
+          Connection status
+        </h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          <ConnectionCell
+            label="API"
+            icon={Server}
+            tone={statusError ? "error" : statusLoading ? "loading" : "ok"}
+            detail={
+              statusError
+                ? "Unreachable"
+                : statusLoading
+                  ? "Checking…"
+                  : "OK"
+            }
+          />
+          <ConnectionCell
+            label="PostgreSQL"
+            icon={Database}
+            tone={
+              statusUnreachable
+                ? "muted"
+                : statusLoading
+                  ? "loading"
+                  : serviceStatus?.database === "connected"
+                    ? "ok"
+                    : "error"
+            }
+            detail={
+              statusUnreachable
+                ? "—"
+                : statusLoading
+                  ? "Checking…"
+                  : serviceStatus?.database === "connected"
+                    ? "Connected"
+                    : "Error"
+            }
+          />
+          <ConnectionCell
+            label="Neo4j"
+            icon={Share2}
+            tone={
+              statusUnreachable
+                ? "muted"
+                : statusLoading
+                  ? "loading"
+                  : serviceStatus?.neo4j === "connected"
+                    ? "ok"
+                    : serviceStatus?.neo4j === "disabled"
+                      ? "muted"
+                      : "error"
+            }
+            detail={
+              statusUnreachable
+                ? "—"
+                : statusLoading
+                  ? "Checking…"
+                  : serviceStatus?.neo4j === "connected"
+                    ? "Connected"
+                    : serviceStatus?.neo4j === "disabled"
+                      ? "Not configured"
+                      : "Unavailable"
+            }
+          />
+          <ConnectionCell
+            label="LLM"
+            icon={Sparkles}
+            tone={
+              statusUnreachable
+                ? "muted"
+                : statusLoading
+                  ? "loading"
+                  : serviceStatus?.llm === "available"
+                    ? "ok"
+                    : "warn"
+            }
+            detail={
+              statusUnreachable
+                ? "—"
+                : statusLoading
+                  ? "Checking…"
+                  : serviceStatus?.llm === "available"
+                    ? "Available"
+                    : "Unavailable (deterministic mode)"
+            }
+            subDetail={
+              statusUnreachable || statusLoading
+                ? undefined
+                : llmSubDetail(serviceStatus)
+            }
+          />
+        </div>
       </div>
 
       <motion.div 
@@ -49,7 +326,7 @@ export default function Dashboard() {
           <p className="text-sm font-medium text-muted-foreground mb-1">Active Simulations</p>
           <div className="text-4xl font-bold text-foreground">
             {isLoadingSims ? "..." : activeSims}
-            <span className="text-lg text-muted-foreground ml-2 font-normal">/ {simulations?.length || 0}</span>
+            <span className="text-lg text-muted-foreground ml-2 font-normal">/ {simRows.length}</span>
           </div>
         </motion.div>
 
@@ -87,7 +364,7 @@ export default function Dashboard() {
           <h2 className="text-xl font-semibold border-b border-border pb-2">Recent Simulations</h2>
           {isLoadingSims ? (
             <div className="h-48 flex items-center justify-center text-muted-foreground">Loading...</div>
-          ) : simulations?.length === 0 ? (
+          ) : simRows.length === 0 ? (
             <div className="bg-card/50 border border-border/50 border-dashed rounded-xl p-8 text-center">
               <Activity className="w-12 h-12 text-muted-foreground mx-auto mb-3 opacity-50" />
               <h3 className="text-lg font-medium text-foreground mb-1">No simulations found</h3>
@@ -96,7 +373,7 @@ export default function Dashboard() {
             </div>
           ) : (
             <div className="space-y-3">
-              {simulations?.slice(0, 5).map(sim => (
+              {simRows.slice(0, 5).map((sim) => (
                 <Link key={sim.id} href={`/simulations/${sim.id}`} className="block">
                   <div className="bg-card border border-border/50 hover:border-primary/50 p-4 rounded-xl shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 flex items-center justify-between group">
                     <div>

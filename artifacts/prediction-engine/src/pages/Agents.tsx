@@ -1,15 +1,16 @@
 import { useState } from "react";
-import { useListAgents, useCreateAgent } from "@workspace/api-client-react";
+import { useListAgents, useCreateAgent, type Agent } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Users, Plus, BrainCircuit, Activity, ChevronRight, Check } from "lucide-react";
 import { Link } from "wouter";
-import { formatScore } from "@/lib/utils";
+import { formatScore, normalizeApiArray } from "@/lib/utils";
 import { motion } from "framer-motion";
 
 export default function Agents() {
   const queryClient = useQueryClient();
   const { data: agents, isLoading } = useListAgents();
   const createAgent = useCreateAgent();
+  const agentList = normalizeApiArray<Agent>(agents);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
   const [formData, setFormData] = useState({
@@ -72,7 +73,7 @@ export default function Agents() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {agents?.map((agent, i) => (
+          {agentList.map((agent, i) => (
             <motion.div 
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}

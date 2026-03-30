@@ -40,6 +40,20 @@ paths:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
 
+  /status:
+    get:
+      operationId: getServiceStatus
+      tags: [health]
+      summary: Integration connection status
+      description: Reports API, PostgreSQL, Neo4j, and LLM connectivity (no secrets).
+      responses:
+        "200":
+          description: Current integration status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceStatus"
+
   /agents:
     get:
       operationId: listAgents
@@ -260,6 +274,26 @@ paths:
                 items:
                   $ref: "#/components/schemas/Post"
 
+  /simulations/{id}/graph:
+    get:
+      operationId: getSimulationGraph
+      tags: [simulations]
+      summary: Graph view data for a simulation
+      description: Agents as nodes, influences as edges, posts and comments for conversation threads.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Nodes, edges, and conversation payloads
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimulationGraphView"
+
   /policies:
     get:
       operationId: listPolicies
@@ -454,6 +488,36 @@ components:
           type: string
       required:
         - status
+
+    ServiceStatus:
+      type: object
+      properties:
+        api:
+          type: string
+          enum: [ok]
+        database:
+          type: string
+          enum: [connected, error]
+        neo4j:
+          type: string
+          enum: [connected, disabled, error]
+        llm:
+          type: string
+          enum: [available, unavailable]
+        llmBackend:
+          type: string
+          nullable: true
+          enum: [ollama, openai_compatible]
+        llmModel:
+          type: string
+          nullable: true
+      required:
+        - api
+        - database
+        - neo4j
+        - llm
+        - llmBackend
+        - llmModel
 
     Agent:
       type: object
@@ -726,6 +790,104 @@ components:
         - agentName
         - simulationId
         - createdAt
+
+    GraphComment:
+      type: object
+      properties:
+        id:
+          type: integer
+        content:
+          type: string
+        sentiment:
+          type: number
+        round:
+          type: integer
+        agentId:
+          type: integer
+        agentName:
+          type: string
+        postId:
+          type: integer
+        simulationId:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+        - id
+        - content
+        - sentiment
+        - round
+        - agentId
+        - agentName
+        - postId
+        - simulationId
+
+    SimulationGraphNode:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        stance:
+          type: string
+        influenceScore:
+          type: number
+        policySupport:
+          type: number
+        confidenceLevel:
+          type: number
+      required:
+        - id
+        - name
+        - stance
+        - influenceScore
+        - policySupport
+        - confidenceLevel
+
+    SimulationGraphEdge:
+      type: object
+      properties:
+        source:
+          type: integer
+        target:
+          type: integer
+        weight:
+          type: number
+      required:
+        - source
+        - target
+        - weight
+
+    SimulationGraphView:
+      type: object
+      properties:
+        simulationId:
+          type: integer
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SimulationGraphNode"
+        edges:
+          type: array
+          items:
+            $ref: "#/components/schemas/SimulationGraphEdge"
+        posts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Post"
+        comments:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphComment"
+      required:
+        - simulationId
+        - nodes
+        - edges
+        - posts
+        - comments
 
     Policy:
       type: object

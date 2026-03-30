@@ -3,6 +3,7 @@ export * from "./policies";
 export * from "./simulations";
 export * from "./agents";
 export * from "./posts";
+export * from "./comments";
 export * from "./influences";
 export * from "./events";
 export * from "./monte_carlo_runs";

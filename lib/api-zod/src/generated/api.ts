@@ -16,6 +16,19 @@ export const HealthCheckResponse = zod.object({
 });
 
 /**
+ * Reports API, PostgreSQL, Neo4j, and LLM connectivity (no secrets).
+ * @summary Integration connection status
+ */
+export const GetServiceStatusResponse = zod.object({
+  api: zod.enum(["ok"]),
+  database: zod.enum(["connected", "error"]),
+  neo4j: zod.enum(["connected", "disabled", "error"]),
+  llm: zod.enum(["available", "unavailable"]),
+  llmBackend: zod.enum(["ollama", "openai_compatible"]).nullable(),
+  llmModel: zod.string().nullable(),
+});
+
+/**
  * @summary List all agents
  */
 export const ListAgentsQueryParams = zod.object({
@@ -348,6 +361,62 @@ export const GetSimulationPostsResponseItem = zod.object({
 export const GetSimulationPostsResponse = zod.array(
   GetSimulationPostsResponseItem,
 );
+
+/**
+ * Agents as nodes, influences as edges, posts and comments for conversation threads.
+ * @summary Graph view data for a simulation
+ */
+export const GetSimulationGraphParams = zod.object({
+  id: zod.coerce.number(),
+});
+
+export const GetSimulationGraphResponse = zod.object({
+  simulationId: zod.number(),
+  nodes: zod.array(
+    zod.object({
+      id: zod.number(),
+      name: zod.string(),
+      stance: zod.string(),
+      influenceScore: zod.number(),
+      policySupport: zod.number(),
+      confidenceLevel: zod.number(),
+    }),
+  ),
+  edges: zod.array(
+    zod.object({
+      source: zod.number(),
+      target: zod.number(),
+      weight: zod.number(),
+    }),
+  ),
+  posts: zod.array(
+    zod.object({
+      id: zod.number(),
+      content: zod.string(),
+      sentiment: zod.number(),
+      platform: zod.string(),
+      topicTags: zod.array(zod.string()).optional(),
+      round: zod.number(),
+      agentId: zod.number(),
+      agentName: zod.string(),
+      simulationId: zod.number(),
+      createdAt: zod.coerce.date(),
+    }),
+  ),
+  comments: zod.array(
+    zod.object({
+      id: zod.number(),
+      content: zod.string(),
+      sentiment: zod.number(),
+      round: zod.number(),
+      agentId: zod.number(),
+      agentName: zod.string(),
+      postId: zod.number(),
+      simulationId: zod.number(),
+      createdAt: zod.coerce.date().nullish(),
+    }),
+  ),
+});
 
 /**
  * @summary List all policies

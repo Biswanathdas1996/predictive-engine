@@ -1,10 +1,12 @@
 import { useRoute } from "wouter";
 import { useGetSimulation, useGetSimulationPosts, useRunSimulationRound } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, Play, StopCircle, RefreshCw, MessageSquare, BrainCircuit, ArrowLeft } from "lucide-react";
+import { Activity, Play, RefreshCw, MessageSquare, BrainCircuit, ArrowLeft, Network } from "lucide-react";
 import { Link } from "wouter";
 import { formatScore } from "@/lib/utils";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SimulationNetworkPanel } from "@/components/SimulationNetworkPanel";
 
 export default function SimulationDetail() {
   const [, params] = useRoute("/simulations/:id");
@@ -20,6 +22,7 @@ export default function SimulationDetail() {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: [`/api/simulations/${id}`] });
         queryClient.invalidateQueries({ queryKey: [`/api/simulations/${id}/posts`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/simulations/${id}/graph`] });
       }
     });
   };
@@ -79,94 +82,111 @@ export default function SimulationDetail() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Stats & Chart */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="grid grid-cols-3 gap-4">
-            <div className="bg-card border border-border p-4 rounded-xl shadow-sm">
-              <div className="text-xs text-muted-foreground mb-1">Total Agents Active</div>
-              <div className="text-2xl font-mono font-semibold">{sim.totalAgents}</div>
-            </div>
-            <div className="bg-card border border-border p-4 rounded-xl shadow-sm">
-              <div className="text-xs text-muted-foreground mb-1">Posts Generated</div>
-              <div className="text-2xl font-mono font-semibold">{sim.totalPosts}</div>
-            </div>
-            <div className="bg-card border border-border p-4 rounded-xl shadow-sm">
-              <div className="text-xs text-muted-foreground flex items-center justify-between mb-1">
-                Learning Rate
-                <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded">α</span>
-              </div>
-              <div className="text-2xl font-mono font-semibold text-accent">{sim.config.learningRate}</div>
-            </div>
-          </div>
+      <Tabs defaultValue="overview" className="space-y-6">
+        <TabsList className="grid w-full max-w-md grid-cols-2 h-auto p-1">
+          <TabsTrigger value="overview" className="gap-2 py-2">
+            <Activity className="w-4 h-4" />
+            Overview
+          </TabsTrigger>
+          <TabsTrigger value="network" className="gap-2 py-2">
+            <Network className="w-4 h-4" />
+            Graph & conversations
+          </TabsTrigger>
+        </TabsList>
 
-          <div className="bg-card border border-border p-6 rounded-2xl shadow-sm h-[400px] flex flex-col">
-            <h3 className="font-semibold mb-6 flex items-center gap-2">
-              <Activity className="w-5 h-5 text-primary" />
-              Belief Evolution Trajectory
-            </h3>
-            <div className="flex-1 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={mockEvolutionData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                  <XAxis dataKey="round" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-                  <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} domain={[-1, 1]} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
-                    itemStyle={{ color: 'hsl(var(--foreground))' }}
-                  />
-                  <Line type="monotone" dataKey="support" name="Policy Support" stroke="hsl(var(--primary))" strokeWidth={3} dot={{ r: 4, fill: "hsl(var(--background))", strokeWidth: 2 }} activeDot={{ r: 6 }} />
-                  <Line type="monotone" dataKey="sentiment" name="Public Sentiment" stroke="hsl(var(--accent))" strokeWidth={3} dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column: Social Feed */}
-        <div className="bg-card border border-border rounded-2xl shadow-sm flex flex-col h-[520px]">
-          <div className="p-4 border-b border-border flex justify-between items-center bg-secondary/20 rounded-t-2xl">
-            <h3 className="font-semibold flex items-center gap-2">
-              <MessageSquare className="w-5 h-5 text-accent" />
-              Social Feed Stream
-            </h3>
-            <div className="text-xs px-2 py-1 bg-background rounded border border-border font-mono">Live</div>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4 space-y-4">
-            {posts?.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-50">
-                <MessageSquare className="w-12 h-12 mb-2" />
-                <p className="text-sm">No communications yet.</p>
-                <p className="text-xs">Run a round to generate posts.</p>
-              </div>
-            ) : (
-              posts?.map((post) => (
-                <div key={post.id} className="bg-background border border-border/50 rounded-xl p-4 text-sm shadow-sm relative overflow-hidden group">
-                  <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary/50 group-hover:bg-primary transition-colors" />
-                  <div className="flex justify-between items-start mb-2">
-                    <div className="font-semibold text-foreground flex items-center gap-1.5">
-                      <BrainCircuit className="w-3.5 h-3.5 text-muted-foreground" />
-                      {post.agentName}
-                    </div>
-                    <div className="text-xs font-mono text-muted-foreground">R{post.round}</div>
-                  </div>
-                  <p className="text-muted-foreground mb-3">{post.content}</p>
-                  <div className="flex justify-between items-center">
-                    <div className="flex gap-1.5">
-                      {post.topicTags?.map(tag => (
-                        <span key={tag} className="text-[10px] uppercase tracking-wider bg-secondary text-secondary-foreground px-1.5 py-0.5 rounded font-medium">#{tag}</span>
-                      ))}
-                    </div>
-                    <div className="text-[10px] font-mono flex items-center gap-1">
-                      Sent: <span className={post.sentiment > 0 ? 'text-emerald-400' : post.sentiment < 0 ? 'text-destructive' : 'text-muted-foreground'}>{formatScore(post.sentiment)}</span>
-                    </div>
-                  </div>
+        <TabsContent value="overview" className="mt-0 space-y-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 space-y-6">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-card border border-border p-4 rounded-xl shadow-sm">
+                  <div className="text-xs text-muted-foreground mb-1">Total Agents Active</div>
+                  <div className="text-2xl font-mono font-semibold">{sim.totalAgents}</div>
                 </div>
-              ))
-            )}
+                <div className="bg-card border border-border p-4 rounded-xl shadow-sm">
+                  <div className="text-xs text-muted-foreground mb-1">Posts Generated</div>
+                  <div className="text-2xl font-mono font-semibold">{sim.totalPosts}</div>
+                </div>
+                <div className="bg-card border border-border p-4 rounded-xl shadow-sm">
+                  <div className="text-xs text-muted-foreground flex items-center justify-between mb-1">
+                    Learning Rate
+                    <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded">α</span>
+                  </div>
+                  <div className="text-2xl font-mono font-semibold text-accent">{sim.config.learningRate}</div>
+                </div>
+              </div>
+
+              <div className="bg-card border border-border p-6 rounded-2xl shadow-sm h-[400px] flex flex-col">
+                <h3 className="font-semibold mb-6 flex items-center gap-2">
+                  <Activity className="w-5 h-5 text-primary" />
+                  Belief Evolution Trajectory
+                </h3>
+                <div className="flex-1 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={mockEvolutionData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
+                      <XAxis dataKey="round" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
+                      <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} domain={[-1, 1]} />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
+                        itemStyle={{ color: 'hsl(var(--foreground))' }}
+                      />
+                      <Line type="monotone" dataKey="support" name="Policy Support" stroke="hsl(var(--primary))" strokeWidth={3} dot={{ r: 4, fill: "hsl(var(--background))", strokeWidth: 2 }} activeDot={{ r: 6 }} />
+                      <Line type="monotone" dataKey="sentiment" name="Public Sentiment" stroke="hsl(var(--accent))" strokeWidth={3} dot={false} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-card border border-border rounded-2xl shadow-sm flex flex-col h-[520px]">
+              <div className="p-4 border-b border-border flex justify-between items-center bg-secondary/20 rounded-t-2xl">
+                <h3 className="font-semibold flex items-center gap-2">
+                  <MessageSquare className="w-5 h-5 text-accent" />
+                  Social Feed Stream
+                </h3>
+                <div className="text-xs px-2 py-1 bg-background rounded border border-border font-mono">Live</div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                {posts?.length === 0 ? (
+                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground opacity-50">
+                    <MessageSquare className="w-12 h-12 mb-2" />
+                    <p className="text-sm">No communications yet.</p>
+                    <p className="text-xs">Run a round to generate posts.</p>
+                  </div>
+                ) : (
+                  posts?.map((post) => (
+                    <div key={post.id} className="bg-background border border-border/50 rounded-xl p-4 text-sm shadow-sm relative overflow-hidden group">
+                      <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary/50 group-hover:bg-primary transition-colors" />
+                      <div className="flex justify-between items-start mb-2">
+                        <div className="font-semibold text-foreground flex items-center gap-1.5">
+                          <BrainCircuit className="w-3.5 h-3.5 text-muted-foreground" />
+                          {post.agentName}
+                        </div>
+                        <div className="text-xs font-mono text-muted-foreground">R{post.round}</div>
+                      </div>
+                      <p className="text-muted-foreground mb-3">{post.content}</p>
+                      <div className="flex justify-between items-center">
+                        <div className="flex gap-1.5">
+                          {post.topicTags?.map(tag => (
+                            <span key={tag} className="text-[10px] uppercase tracking-wider bg-secondary text-secondary-foreground px-1.5 py-0.5 rounded font-medium">#{tag}</span>
+                          ))}
+                        </div>
+                        <div className="text-[10px] font-mono flex items-center gap-1">
+                          Sent: <span className={post.sentiment > 0 ? 'text-emerald-400' : post.sentiment < 0 ? 'text-destructive' : 'text-muted-foreground'}>{formatScore(post.sentiment)}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        </TabsContent>
+
+        <TabsContent value="network" className="mt-0">
+          <SimulationNetworkPanel simulationId={id} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

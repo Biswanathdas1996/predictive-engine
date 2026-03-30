@@ -1,15 +1,17 @@
 import { useState } from "react";
-import { useListSimulations, useGetSimulationReport } from "@workspace/api-client-react";
+import { useListSimulations, useGetSimulationReport, type Simulation } from "@workspace/api-client-react";
 import { FileText, Target, AlertTriangle, Users, GitMerge, Download } from "lucide-react";
 import { formatPercent, formatScore } from "@/lib/utils";
 import { format } from "date-fns";
+import { normalizeApiArray } from "@/lib/utils";
 
 export default function Reports() {
   const { data: simulations } = useListSimulations();
+  const simulationList = normalizeApiArray<Simulation>(simulations);
   const [selectedSim, setSelectedSim] = useState<string>("");
   
   const { data: report, isLoading } = useGetSimulationReport(parseInt(selectedSim), {
-    query: { enabled: !!selectedSim }
+    query: { enabled: !!selectedSim } as any
   });
 
   return (
@@ -30,7 +32,7 @@ export default function Reports() {
             className="bg-card border border-border rounded-xl px-4 py-2 text-sm font-medium focus:outline-none focus:border-primary shadow-sm min-w-[250px]"
           >
             <option value="">Select a simulation...</option>
-            {simulations?.map(s => (
+            {simulationList.map(s => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>

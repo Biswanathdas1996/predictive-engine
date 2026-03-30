@@ -9,6 +9,56 @@ export interface HealthStatus {
   status: string;
 }
 
+export type ServiceStatusApi =
+  (typeof ServiceStatusApi)[keyof typeof ServiceStatusApi];
+
+export const ServiceStatusApi = {
+  ok: "ok",
+} as const;
+
+export type ServiceStatusDatabase =
+  (typeof ServiceStatusDatabase)[keyof typeof ServiceStatusDatabase];
+
+export const ServiceStatusDatabase = {
+  connected: "connected",
+  error: "error",
+} as const;
+
+export type ServiceStatusNeo4j =
+  (typeof ServiceStatusNeo4j)[keyof typeof ServiceStatusNeo4j];
+
+export const ServiceStatusNeo4j = {
+  connected: "connected",
+  disabled: "disabled",
+  error: "error",
+} as const;
+
+export type ServiceStatusLlm =
+  (typeof ServiceStatusLlm)[keyof typeof ServiceStatusLlm];
+
+export const ServiceStatusLlm = {
+  available: "available",
+  unavailable: "unavailable",
+} as const;
+
+export type ServiceStatusLlmBackend =
+  | (typeof ServiceStatusLlmBackend)[keyof typeof ServiceStatusLlmBackend]
+  | null;
+
+export const ServiceStatusLlmBackend = {
+  ollama: "ollama",
+  openai_compatible: "openai_compatible",
+} as const;
+
+export interface ServiceStatus {
+  api: ServiceStatusApi;
+  database: ServiceStatusDatabase;
+  neo4j: ServiceStatusNeo4j;
+  llm: ServiceStatusLlm;
+  llmBackend: ServiceStatusLlmBackend;
+  llmModel: string | null;
+}
+
 export interface BeliefState {
   policySupport: number;
   trustInGovernment: number;
@@ -120,6 +170,41 @@ export interface Post {
   agentName: string;
   simulationId: number;
   createdAt: string;
+}
+
+export interface GraphComment {
+  id: number;
+  content: string;
+  sentiment: number;
+  round: number;
+  agentId: number;
+  agentName: string;
+  postId: number;
+  simulationId: number;
+  createdAt?: string | null;
+}
+
+export interface SimulationGraphNode {
+  id: number;
+  name: string;
+  stance: string;
+  influenceScore: number;
+  policySupport: number;
+  confidenceLevel: number;
+}
+
+export interface SimulationGraphEdge {
+  source: number;
+  target: number;
+  weight: number;
+}
+
+export interface SimulationGraphView {
+  simulationId: number;
+  nodes: SimulationGraphNode[];
+  edges: SimulationGraphEdge[];
+  posts: Post[];
+  comments: GraphComment[];
 }
 
 export interface Policy {

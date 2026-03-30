@@ -38,7 +38,9 @@ import type {
   Policy,
   Post,
   PredictionReport,
+  ServiceStatus,
   Simulation,
+  SimulationGraphView,
   SimulationRoundResult,
   UpdateAgentBody,
 } from "./api.schemas";
@@ -120,6 +122,82 @@ export function useHealthCheck<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Reports API, PostgreSQL, Neo4j, and LLM connectivity (no secrets).
+ * @summary Integration connection status
+ */
+export const getGetServiceStatusUrl = () => {
+  return `/api/status`;
+};
+
+export const getServiceStatus = async (
+  options?: RequestInit,
+): Promise<ServiceStatus> => {
+  return customFetch<ServiceStatus>(getGetServiceStatusUrl(), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetServiceStatusQueryKey = () => {
+  return [`/api/status`] as const;
+};
+
+export const getGetServiceStatusQueryOptions = <
+  TData = Awaited<ReturnType<typeof getServiceStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getServiceStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetServiceStatusQueryKey();
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getServiceStatus>>
+  > = ({ signal }) => getServiceStatus({ signal, ...requestOptions });
+
+  return { queryKey, queryFn, ...queryOptions } as UseQueryOptions<
+    Awaited<ReturnType<typeof getServiceStatus>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetServiceStatusQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getServiceStatus>>
+>;
+export type GetServiceStatusQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Integration connection status
+ */
+
+export function useGetServiceStatus<
+  TData = Awaited<ReturnType<typeof getServiceStatus>>,
+  TError = ErrorType<unknown>,
+>(options?: {
+  query?: UseQueryOptions<
+    Awaited<ReturnType<typeof getServiceStatus>>,
+    TError,
+    TData
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetServiceStatusQueryOptions(options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;
@@ -1170,6 +1248,94 @@ export function useGetSimulationPosts<
   },
 ): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getGetSimulationPostsQueryOptions(id, params, options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * Agents as nodes, influences as edges, posts and comments for conversation threads.
+ * @summary Graph view data for a simulation
+ */
+export const getGetSimulationGraphUrl = (id: number) => {
+  return `/api/simulations/${id}/graph`;
+};
+
+export const getSimulationGraph = async (
+  id: number,
+  options?: RequestInit,
+): Promise<SimulationGraphView> => {
+  return customFetch<SimulationGraphView>(getGetSimulationGraphUrl(id), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetSimulationGraphQueryKey = (id: number) => {
+  return [`/api/simulations/${id}/graph`] as const;
+};
+
+export const getGetSimulationGraphQueryOptions = <
+  TData = Awaited<ReturnType<typeof getSimulationGraph>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getSimulationGraph>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey = queryOptions?.queryKey ?? getGetSimulationGraphQueryKey(id);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getSimulationGraph>>
+  > = ({ signal }) => getSimulationGraph(id, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!id,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getSimulationGraph>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetSimulationGraphQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getSimulationGraph>>
+>;
+export type GetSimulationGraphQueryError = ErrorType<unknown>;
+
+/**
+ * @summary Graph view data for a simulation
+ */
+
+export function useGetSimulationGraph<
+  TData = Awaited<ReturnType<typeof getSimulationGraph>>,
+  TError = ErrorType<unknown>,
+>(
+  id: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getSimulationGraph>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetSimulationGraphQueryOptions(id, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

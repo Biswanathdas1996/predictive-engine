@@ -10,7 +10,7 @@ Policy-Grounded Multi-Agent Prediction Engine - a full-stack application for gra
 - **Node.js version**: 24
 - **Package manager**: pnpm
 - **TypeScript version**: 5.9
-- **API framework**: Express 5
+- **API framework**: FastAPI (Python 3.11+)
 - **Database**: PostgreSQL + Drizzle ORM
 - **Validation**: Zod (`zod/v4`), `drizzle-zod`
 - **API codegen**: Orval (from OpenAPI spec)
@@ -23,7 +23,7 @@ Policy-Grounded Multi-Agent Prediction Engine - a full-stack application for gra
 ```text
 artifacts-monorepo/
 ├── artifacts/
-│   ├── api-server/         # Express API server
+│   ├── api-server-py/      # FastAPI + asyncpg API server
 │   └── prediction-engine/  # React frontend dashboard
 ├── lib/
 │   ├── api-spec/           # OpenAPI spec + Orval codegen config
@@ -102,7 +102,7 @@ artifacts-monorepo/
 
 ## Simulation Engine
 
-The simulation engine (`artifacts/api-server/src/lib/simulation-engine.ts`) implements:
+The simulation engine (`artifacts/api-server-py/app/services/simulation_engine.py`) implements:
 
 1. **Belief Update Algorithm**: Agents update their beliefs based on incoming signals from connected agents, weighted by influence and credibility scores. Uses a configurable learning rate (default 0.3).
 
@@ -122,8 +122,8 @@ Every package extends `tsconfig.base.json` which sets `composite: true`. The roo
 
 ## Packages
 
-### `artifacts/api-server` (`@workspace/api-server`)
-Express 5 API server with simulation engine, Monte Carlo analysis, and prediction reporting.
+### `artifacts/api-server-py` (FastAPI)
+Python API server with asyncpg, simulation engine, Monte Carlo analysis, and prediction reporting.
 
 ### `artifacts/prediction-engine` (`@workspace/prediction-engine`)
 React + Vite dashboard with dark mode professional design, featuring simulation management, agent visualization, Monte Carlo analysis, and prediction reports.

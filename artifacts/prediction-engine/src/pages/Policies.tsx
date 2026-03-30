@@ -1,9 +1,11 @@
-import { useListPolicies } from "@workspace/api-client-react";
+import { useListPolicies, type Policy } from "@workspace/api-client-react";
 import { FileBadge, Plus } from "lucide-react";
 import { format } from "date-fns";
+import { normalizeApiArray } from "@/lib/utils";
 
 export default function Policies() {
   const { data: policies, isLoading } = useListPolicies();
+  const policyList = normalizeApiArray<Policy>(policies);
 
   return (
     <div className="space-y-6">
@@ -23,7 +25,7 @@ export default function Policies() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {isLoading ? (
           <div className="col-span-full h-32 flex items-center justify-center text-muted-foreground">Loading...</div>
-        ) : policies?.map(policy => (
+        ) : policyList.map(policy => (
           <div key={policy.id} className="bg-card border border-border p-6 rounded-2xl shadow-sm hover:border-primary/50 transition-all flex flex-col h-full">
             <div className="flex justify-between items-start mb-4">
               <FileBadge className="w-8 h-8 text-primary/70" />

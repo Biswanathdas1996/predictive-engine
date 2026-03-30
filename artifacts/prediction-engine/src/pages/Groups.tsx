@@ -1,8 +1,10 @@
-import { useListGroups } from "@workspace/api-client-react";
+import { useListGroups, type Group } from "@workspace/api-client-react";
 import { Network, Plus } from "lucide-react";
+import { normalizeApiArray } from "@/lib/utils";
 
 export default function Groups() {
   const { data: groups, isLoading } = useListGroups();
+  const groupList = normalizeApiArray<Group>(groups);
 
   return (
     <div className="space-y-6">
@@ -22,7 +24,7 @@ export default function Groups() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {isLoading ? (
           <div className="col-span-full text-center text-muted-foreground py-12">Loading...</div>
-        ) : groups?.map(group => (
+        ) : groupList.map((group) => (
           <div key={group.id} className="bg-card border border-border p-6 rounded-2xl shadow-sm hover:border-accent/50 transition-all">
             <h3 className="text-xl font-bold mb-2 text-foreground">{group.name}</h3>
             <p className="text-sm text-muted-foreground">{group.description}</p>

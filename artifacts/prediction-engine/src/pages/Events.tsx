@@ -1,9 +1,10 @@
-import { useListEvents } from "@workspace/api-client-react";
+import { useListEvents, type Event } from "@workspace/api-client-react";
 import { AlertTriangle, Plus } from "lucide-react";
-import { formatScore } from "@/lib/utils";
+import { formatScore, normalizeApiArray } from "@/lib/utils";
 
 export default function Events() {
   const { data: events, isLoading } = useListEvents();
+  const eventList = normalizeApiArray<Event>(events);
 
   return (
     <div className="space-y-6">
@@ -33,7 +34,7 @@ export default function Events() {
           <tbody className="divide-y divide-border/50">
             {isLoading ? (
               <tr><td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">Loading...</td></tr>
-            ) : events?.map(event => (
+            ) : eventList.map((event) => (
               <tr key={event.id} className="hover:bg-secondary/10 transition-colors">
                 <td className="px-6 py-4 font-medium">
                   <span className="bg-amber-500/10 text-amber-500 border border-amber-500/20 px-2 py-1 rounded text-xs">

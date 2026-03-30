@@ -1,16 +1,27 @@
 import { useState } from "react";
-import { useListSimulations, useCreateSimulation, useListPolicies } from "@workspace/api-client-react";
+import {
+  useListSimulations,
+  useCreateSimulation,
+  useListPolicies,
+  type Policy,
+  type Simulation,
+} from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Activity, Plus, Play, Info } from "lucide-react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
+import { normalizeApiArray } from "@/lib/utils";
+import { toast } from "@/hooks/use-toast";
 
 export default function Simulations() {
   const queryClient = useQueryClient();
   const { data: simulations, isLoading } = useListSimulations();
   const { data: policies } = useListPolicies();
   const createSim = useCreateSimulation();
+
+  const simulationList = normalizeApiArray<Simulation>(simulations);
+  const policyList = normalizeApiArray<Policy>(policies);
   
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [formData, setFormData] = useState({
@@ -24,23 +35,56 @@ export default function Simulations() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    createSim.mutate({
-      data: {
-        name: formData.name,
-        description: formData.description,
-        config: {
-          learningRate: formData.learningRate,
-          numRounds: formData.numRounds,
-          agentCount: formData.agentCount,
-          policyId: formData.policyId ? parseInt(formData.policyId) : null
-        }
-      }
-    }, {
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: ["/api/simulations"] });
-        setIsDialogOpen(false);
-      }
-    });
+    const agentCount = Number.isFinite(formData.agentCount)
+      ? Math.max(1, Math.floor(formData.agentCount))
+      : 100;
+    const numRounds = Number.isFinite(formData.numRounds)
+      ? Math.max(1, Math.floor(formData.numRounds))
+      : 10;
+    const learningRate = Number.isFinite(formData.learningRate)
+      ? formData.learningRate
+      : 0.1;
+    const rawPolicyId = formData.policyId
+      ? parseInt(formData.policyId, 10)
+      : NaN;
+    const policyId = Number.isFinite(rawPolicyId) ? rawPolicyId : null;
+    createSim.mutate(
+      {
+        data: {
+          name: formData.name.trim(),
+          description: formData.description.trim(),
+          config: {
+            learningRate,
+            numRounds,
+            agentCount,
+            policyId,
+          },
+        },
+      },
+      {
+        onSuccess: () => {
+          queryClient.invalidateQueries({ queryKey: ["/api/simulations"] });
+          setIsDialogOpen(false);
+          setFormData({
+            name: "",
+            description: "",
+            learningRate: 0.1,
+            numRounds: 10,
+            agentCount: 100,
+            policyId: "",
+          });
+        },
+        onError: (err) => {
+          const message =
+            err instanceof Error ? err.message : "Something went wrong.";
+          toast({
+            variant: "destructive",
+            title: "Could not create simulation",
+            description: message,
+          });
+        },
+      },
+    );
   };
 
   return (
@@ -78,10 +122,10 @@ export default function Simulations() {
             <tbody className="divide-y divide-border/50">
               {isLoading ? (
                 <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">Loading...</td></tr>
-              ) : simulations?.length === 0 ? (
+              ) : simulationList.length === 0 ? (
                 <tr><td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">No simulations created yet.</td></tr>
               ) : (
-                simulations?.map((sim) => (
+                simulationList.map((sim) => (
                   <tr key={sim.id} className="hover:bg-secondary/20 transition-colors group">
                     <td className="px-6 py-4">
                       <div className="font-semibold text-foreground">{sim.name}</div>
@@ -170,7 +214,7 @@ export default function Simulations() {
                   className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50 appearance-none"
                 >
                   <option value="">No specific policy (Baseline)</option>
-                  {policies?.map(p => (
+                  {policyList.map(p => (
                     <option key={p.id} value={p.id}>{p.title}</option>
                   ))}
                 </select>
@@ -222,5 +266,5 @@ export default function Simulations() {
 
 // Needed a Chevron component for the table
 function ChevronRight({ className }: { className?: string }) {
-  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinelinejoin="round" className={className}><path d="m9 18 6-6-6-6"/></svg>
+  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m9 18 6-6-6-6"/></svg>
 }

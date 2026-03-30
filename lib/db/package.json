@@ -8,8 +8,10 @@
     "./schema": "./src/schema/index.ts"
   },
   "scripts": {
-    "push": "drizzle-kit push --config ./drizzle.config.ts",
-    "push-force": "drizzle-kit push --force --config ./drizzle.config.ts"
+    "push": "node --env-file=../../.env ./node_modules/drizzle-kit/bin.cjs push --config ./drizzle.config.ts",
+    "push-force": "node --env-file=../../.env ./node_modules/drizzle-kit/bin.cjs push --force --config ./drizzle.config.ts",
+    "reset-schema": "node --env-file=../../.env ./scripts/reset-schema.mjs",
+    "reset-db": "pnpm run reset-schema && pnpm run push"
   },
   "dependencies": {
     "drizzle-orm": "catalog:",

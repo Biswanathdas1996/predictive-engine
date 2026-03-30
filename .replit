@@ -1,7 +1,7 @@
 modules = ["nodejs-24"]
 
 [[artifacts]]
-id = "artifacts/api-server"
+id = "artifacts/api-server-py"
 
 [[artifacts]]
 id = "artifacts/mockup-sandbox"

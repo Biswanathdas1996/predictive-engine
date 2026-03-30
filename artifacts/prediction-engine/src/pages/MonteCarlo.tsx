@@ -1,11 +1,17 @@
 import { useState } from "react";
-import { useListSimulations, useRunMonteCarlo, useGetMonteCarloRuns } from "@workspace/api-client-react";
+import {
+  useListSimulations,
+  useRunMonteCarlo,
+  useGetMonteCarloRuns,
+  type Simulation,
+} from "@workspace/api-client-react";
 import { BarChart2, Zap, Settings, AlertTriangle } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell } from 'recharts';
-import { formatScore, formatPercent } from "@/lib/utils";
+import { formatScore, formatPercent, normalizeApiArray } from "@/lib/utils";
 
 export default function MonteCarlo() {
   const { data: simulations } = useListSimulations();
+  const simulationList = normalizeApiArray<Simulation>(simulations);
   const runMC = useRunMonteCarlo();
   
   const [selectedSim, setSelectedSim] = useState<string>("");
@@ -13,7 +19,7 @@ export default function MonteCarlo() {
   const [result, setResult] = useState<any>(null);
 
   const { data: history } = useGetMonteCarloRuns(parseInt(selectedSim), {
-    query: { enabled: !!selectedSim }
+    query: { enabled: !!selectedSim } as any
   });
 
   const handleRun = () => {
@@ -74,7 +80,7 @@ export default function MonteCarlo() {
                 className="w-full bg-background border border-border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50"
               >
                 <option value="">Select a model...</option>
-                {simulations?.map(s => (
+                {simulationList.map(s => (
                   <option key={s.id} value={s.id}>{s.name} (Rounds: {s.config.numRounds})</option>
                 ))}
               </select>
