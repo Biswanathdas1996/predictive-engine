@@ -38,13 +38,15 @@ artifacts-monorepo/
 ```
 
 ## Graph Interface
-- Modern graph database-style network visualization using React Flow
+- Knowledge graph database-style visualization using React Flow (light theme)
+- Colorful solid circular nodes with name labels beside them (like Neo4j browser)
+- "Show Edge Labels" toggle to display INFLUENCES relationship labels on connections
 - Full-screen mode with Escape key to exit
-- Floating toolbar with zoom controls, agent search, and fullscreen toggle
-- Floating inspector panel on node click showing agent details, relationships, posts
-- Stance-colored nodes (green=supportive, red=opposed, gray=neutral, purple=radical)
-- Concentric ring layout for large networks
-- Bottom legend and stats overlay
+- Floating toolbar with zoom controls, agent search, edge label toggle, and fullscreen
+- Floating inspector panel on node click showing full agent details, relationships, posts
+- All nodes are draggable for manual layout adjustment
+- Entity Types legend at bottom left (Supportive=green, Opposed=red, Neutral=indigo, Radical=purple)
+- Connection-aware layout sorting (most connected nodes placed centrally)
 - MiniMap for navigation
 - Component: `SimulationNetworkPanel.tsx` + `SimulationNetworkPanel.css`
 
