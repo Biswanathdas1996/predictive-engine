@@ -37,6 +37,17 @@ artifacts-monorepo/
 └── package.json
 ```
 
+## Graph Interface
+- Modern graph database-style network visualization using React Flow
+- Full-screen mode with Escape key to exit
+- Floating toolbar with zoom controls, agent search, and fullscreen toggle
+- Floating inspector panel on node click showing agent details, relationships, posts
+- Stance-colored nodes (green=supportive, red=opposed, gray=neutral, purple=radical)
+- Concentric ring layout for large networks
+- Bottom legend and stats overlay
+- MiniMap for navigation
+- Component: `SimulationNetworkPanel.tsx` + `SimulationNetworkPanel.css`
+
 ## Key Features
 
 ### Multi-Agent Simulation

@@ -1,69 +1,199 @@
-/* Neo4j Browser–inspired graph chrome (scoped via parent .neo4j-graph-view) */
-
-.neo4j-graph-view.react-flow {
-  --xy-edge-stroke-default: #6e7681;
+.graph-db-view.react-flow {
+  --xy-edge-stroke-default: #4a5568;
 }
 
-.neo4j-graph-view .react-flow__pane {
+.graph-db-view .react-flow__pane {
   cursor: grab;
 }
 
-.neo4j-graph-view .react-flow__pane:active {
+.graph-db-view .react-flow__pane:active {
   cursor: grabbing;
 }
 
-.neo4j-graph-view .react-flow__controls {
-  background: rgba(22, 27, 34, 0.92);
-  border: 1px solid #30363d;
-  border-radius: 10px;
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.04) inset,
-    0 8px 32px rgba(0, 0, 0, 0.45);
+.graph-db-view .react-flow__controls {
+  background: rgba(15, 18, 25, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   overflow: hidden;
+  backdrop-filter: blur(12px);
 }
 
-.neo4j-graph-view .react-flow__controls-button {
+.graph-db-view .react-flow__controls-button {
   background: transparent;
   border: none;
-  border-bottom: 1px solid #30363d;
-  fill: #8b949e;
-  width: 28px;
-  height: 28px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  fill: #94a3b8;
+  width: 32px;
+  height: 32px;
+  transition: all 0.15s ease;
 }
 
-.neo4j-graph-view .react-flow__controls-button:last-child {
+.graph-db-view .react-flow__controls-button:last-child {
   border-bottom: none;
 }
 
-.neo4j-graph-view .react-flow__controls-button:hover {
-  background: #21262d;
-  fill: #e6edf3;
+.graph-db-view .react-flow__controls-button:hover {
+  background: rgba(99, 102, 241, 0.15);
+  fill: #c7d2fe;
 }
 
-.neo4j-graph-view .react-flow__minimap {
-  background: #0d1117 !important;
-  border: 1px solid #30363d !important;
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+.graph-db-view .react-flow__minimap {
+  background: rgba(15, 18, 25, 0.95) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(12px);
 }
 
-.neo4j-graph-view .react-flow__attribution {
+.graph-db-view .react-flow__attribution {
   display: none;
 }
 
-/* Contain node content — avoids a wall of selectable text in the pane */
-.neo4j-graph-view .react-flow__node {
+.graph-db-view .react-flow__node {
   cursor: pointer;
 }
 
-.neo4j-graph-view .neo-agent-root {
+.graph-db-view .neo-agent-root {
   user-select: none;
   -webkit-user-select: none;
 }
 
-.neo4j-graph-view .react-flow__handle {
+.graph-db-view .react-flow__handle {
   opacity: 0;
-  min-width: 8px;
-  min-height: 8px;
+  min-width: 6px;
+  min-height: 6px;
 }
 
+.graph-db-fullscreen {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  background: #0a0c14;
+}
+
+.graph-db-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #0a0c14;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.graph-db-fullscreen .graph-db-container {
+  border-radius: 0;
+  border: none;
+}
+
+.graph-db-toolbar {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  pointer-events: none;
+}
+
+.graph-db-toolbar > * {
+  pointer-events: auto;
+}
+
+.graph-db-toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(15, 18, 25, 0.92);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 6px 12px;
+}
+
+.graph-db-legend {
+  position: absolute;
+  bottom: 16px;
+  left: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  background: rgba(15, 18, 25, 0.92);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 8px 16px;
+}
+
+.graph-db-inspector {
+  position: absolute;
+  top: 72px;
+  right: 16px;
+  z-index: 10;
+  width: 320px;
+  max-height: calc(100% - 100px);
+  overflow-y: auto;
+  background: rgba(15, 18, 25, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+}
+
+.graph-db-inspector::-webkit-scrollbar {
+  width: 4px;
+}
+
+.graph-db-inspector::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.graph-db-inspector::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+}
+
+.graph-db-stats {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  gap: 6px;
+}
+
+.graph-db-stat-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(15, 18, 25, 0.92);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: #94a3b8;
+  font-family: ui-monospace, monospace;
+}
+
+@keyframes inspector-enter {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.graph-db-inspector {
+  animation: inspector-enter 0.2s ease-out;
+}
