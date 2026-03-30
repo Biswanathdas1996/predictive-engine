@@ -1,19 +1,25 @@
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState, type CSSProperties } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Background,
+  BackgroundVariant,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
   Handle,
   MarkerType,
   MiniMap,
   Position,
   ReactFlow,
+  getBezierPath,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeProps,
   type NodeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import "./SimulationNetworkPanel.css";
 import {
   getGetSimulationGraphQueryOptions,
   type GraphComment,
@@ -21,55 +27,184 @@ import {
   type SimulationGraphEdge,
   type SimulationGraphNode,
 } from "@workspace/api-client-react";
-import { GitBranch, MessageCircle, Users } from "lucide-react";
+import { Database, GitBranch, MessageCircle, Users } from "lucide-react";
 import { formatScore } from "@/lib/utils";
 
 type AgentNodeData = {
+  agentId: number;
   label: string;
   stance: string;
   policySupport: number;
 };
 
-const stanceRing: Record<string, string> = {
-  supportive: "border-emerald-500/60 bg-emerald-500/10",
-  opposed: "border-destructive/60 bg-destructive/10",
-  neutral: "border-border bg-secondary/40",
-  radical: "border-violet-500/60 bg-violet-500/10",
+function initialsFromName(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    const a = parts[0][0] ?? "";
+    const b = parts[parts.length - 1][0] ?? "";
+    return `${a}${b}`.toUpperCase() || "?";
+  }
+  if (parts.length === 1 && parts[0].length >= 2) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+  return (parts[0]?.[0] ?? "?").toUpperCase();
+}
+
+/** Neo4j-style node capsule colors (dark UI) */
+const stanceNeo: Record<string, { fill: string; ring: string; glow: string }> = {
+  supportive: {
+    fill: "bg-[#1a3d2e]",
+    ring: "border-[#3fb950]",
+    glow: "shadow-[0_0_24px_rgba(63,185,80,0.35)]",
+  },
+  opposed: {
+    fill: "bg-[#3d1a1f]",
+    ring: "border-[#f85149]",
+    glow: "shadow-[0_0_24px_rgba(248,81,73,0.3)]",
+  },
+  neutral: {
+    fill: "bg-[#21262d]",
+    ring: "border-[#8b949e]",
+    glow: "shadow-[0_0_20px_rgba(139,148,158,0.2)]",
+  },
+  radical: {
+    fill: "bg-[#2d1f3d]",
+    ring: "border-[#a371f7]",
+    glow: "shadow-[0_0_24px_rgba(163,113,247,0.35)]",
+  },
 };
 
 const AgentNode = memo(function AgentNode({ data, selected }: NodeProps) {
   const d = data as AgentNodeData;
-  const ring = stanceRing[d.stance] ?? stanceRing.neutral;
+  const neo = stanceNeo[d.stance] ?? stanceNeo.neutral;
+  const initials = initialsFromName(d.label);
+  const tip = `${d.label}\n:id ${d.agentId} · ${d.stance}\nPolicy support ${formatScore(d.policySupport)}`;
   return (
     <div
-      className={`rounded-xl border px-2 py-1.5 min-w-[108px] max-w-[150px] shadow-md backdrop-blur-sm ${ring} ${
-        selected ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""
-      }`}
+      className="neo-agent-root relative flex w-[84px] flex-col items-center"
+      role="group"
+      aria-label={tip.replaceAll("\n", ". ")}
     >
-      <Handle
-        type="target"
-        position={Position.Top}
-        className="!size-2 !border-0 !bg-muted-foreground"
-      />
-      <div className="text-[11px] font-semibold leading-tight truncate text-foreground" title={d.label}>
-        {d.label}
+      <Handle type="target" position={Position.Top} className="!top-0" />
+      <Handle type="target" position={Position.Left} id="in-l" />
+      <Handle type="target" position={Position.Right} id="in-r" />
+      <div
+        className={[
+          "flex h-[68px] w-[68px] shrink-0 items-center justify-center rounded-full border-[2.5px] transition-all duration-200",
+          neo.fill,
+          neo.ring,
+          neo.glow,
+          selected
+            ? "scale-[1.06] ring-2 ring-[#58a6ff] ring-offset-2 ring-offset-[#0d1117]"
+            : "hover:brightness-[1.08]",
+        ].join(" ")}
+        title={tip}
+      >
+        <span className="select-none text-[19px] font-bold tabular-nums tracking-tight text-[#f0f6fc]">
+          {initials}
+        </span>
       </div>
-      <div className="text-[9px] text-muted-foreground font-mono mt-0.5">
-        stance: {d.stance}
+      <div className="mt-1 flex w-full flex-col items-center gap-0.5">
+        <span className="select-none rounded bg-[#21262d] px-1.5 py-px font-mono text-[9px] font-medium text-[#8b949e] ring-1 ring-[#30363d]">
+          Agent
+        </span>
+        <span className="select-none max-w-full truncate font-mono text-[9px] text-[#6e7681]" title={d.label}>
+          #{d.agentId}
+        </span>
       </div>
-      <div className="text-[9px] font-mono text-primary/90">μ pol. {formatScore(d.policySupport)}</div>
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!size-2 !border-0 !bg-muted-foreground"
-      />
+      <Handle type="source" position={Position.Bottom} className="!bottom-0" />
+      <Handle type="source" position={Position.Left} id="out-l" />
+      <Handle type="source" position={Position.Right} id="out-r" />
     </div>
   );
 });
 
-const nodeTypes: NodeTypes = { agent: AgentNode };
+type InfluenceEdgeData = { weight: number; labelMode: "always" | "hover-only" };
 
-function layoutCircle(
+const InfluenceEdge = memo(function InfluenceEdge({
+  id,
+  sourceX,
+  sourceY,
+  targetX,
+  targetY,
+  sourcePosition,
+  targetPosition,
+  style,
+  markerEnd,
+  data,
+  selected,
+}: EdgeProps) {
+  const [hovered, setHovered] = useState(false);
+  const [edgePath, labelX, labelY] = getBezierPath({
+    sourceX,
+    sourceY,
+    sourcePosition,
+    targetX,
+    targetY,
+    targetPosition,
+  });
+  const d = data as InfluenceEdgeData | undefined;
+  const w = typeof d?.weight === "number" ? d.weight : 0;
+  const mode = d?.labelMode ?? "hover-only";
+  const showLabel = mode === "always" || hovered || Boolean(selected);
+
+  const baseStyle = { ...(style as CSSProperties), pointerEvents: "none" as const };
+
+  return (
+    <>
+      {/* Wide invisible stroke for hover — readable labels when graph is dense */}
+      <path
+        d={edgePath}
+        fill="none"
+        stroke="transparent"
+        strokeWidth={22}
+        strokeLinecap="round"
+        className="react-flow__edge-interaction"
+        style={{ cursor: mode === "hover-only" ? "pointer" : "default" }}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+      />
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={baseStyle} />
+      <EdgeLabelRenderer>
+        {showLabel ? (
+          <div
+            className="nodrag nopan"
+            style={{
+              position: "absolute",
+              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+              zIndex: 1000,
+              pointerEvents: "none",
+            }}
+          >
+            <div className="neo-edge-label flex flex-col items-center gap-0.5 rounded-lg border-2 border-[#58a6ff] bg-[#0d1117] px-3 py-1.5 shadow-[0_4px_24px_rgba(0,0,0,0.65),0_0_0_1px_rgba(255,255,255,0.08)]">
+              <span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[#8b949e]">
+                Influence
+              </span>
+              <span
+                className="tabular-nums text-[15px] font-bold leading-none tracking-tight text-[#f0f6fc]"
+                style={{ textShadow: "0 1px 2px rgba(0,0,0,0.9)" }}
+              >
+                {w.toFixed(2)}
+              </span>
+            </div>
+          </div>
+        ) : null}
+      </EdgeLabelRenderer>
+    </>
+  );
+});
+
+const nodeTypes: NodeTypes = { agent: AgentNode };
+const edgeTypes = { influence: InfluenceEdge };
+
+const NODES_PER_RING = 12;
+/** Visual half-extent of node (circle + label stack) for centering */
+const NODE_LAYOUT_R = 48;
+
+/**
+ * Concentric rings (graph-db style) so dense simulations stay legible.
+ */
+function layoutGraphRings(
   nodes: SimulationGraphNode[],
   width: number,
   height: number,
@@ -77,36 +212,64 @@ function layoutCircle(
   const n = nodes.length;
   const cx = width / 2;
   const cy = height / 2;
-  const r = Math.min(width, height) * 0.36;
-  return nodes.map((node, i) => {
-    const angle = (2 * Math.PI * i) / Math.max(n, 1) - Math.PI / 2;
-    return {
-      id: String(node.id),
-      type: "agent",
-      position: {
-        x: cx + r * Math.cos(angle) - 54,
-        y: cy + r * Math.sin(angle) - 28,
-      },
-      data: {
-        label: node.name,
-        stance: node.stance,
-        policySupport: node.policySupport,
-      } satisfies AgentNodeData,
-    };
+  const minDim = Math.min(width, height);
+
+  const rings: SimulationGraphNode[][] = [];
+  for (let i = 0; i < n; i += NODES_PER_RING) {
+    rings.push(nodes.slice(i, i + NODES_PER_RING));
+  }
+
+  const ringCount = rings.length;
+  const baseR = minDim * (n <= 10 ? 0.16 : 0.2);
+  const step = minDim * Math.max(0.1, 0.11 - ringCount * 0.008);
+
+  const out: Node[] = [];
+  rings.forEach((ringNodes, ringIdx) => {
+    const count = ringNodes.length;
+    const r = baseR + ringIdx * step;
+    ringNodes.forEach((node, i) => {
+      const angle = (2 * Math.PI * i) / Math.max(count, 1) - Math.PI / 2;
+      out.push({
+        id: String(node.id),
+        type: "agent",
+        position: {
+          x: cx + r * Math.cos(angle) - NODE_LAYOUT_R,
+          y: cy + r * Math.sin(angle) - NODE_LAYOUT_R,
+        },
+        data: {
+          agentId: node.id,
+          label: node.name,
+          stance: node.stance,
+          policySupport: node.policySupport,
+        } satisfies AgentNodeData,
+      });
+    });
   });
+
+  return out;
 }
 
+/** Beyond this, edge labels overlap — show weight on hover only. */
+const EDGE_LABEL_ALWAYS_MAX = 14;
+
 function buildEdges(edges: SimulationGraphEdge[]): Edge[] {
+  const labelMode: InfluenceEdgeData["labelMode"] =
+    edges.length <= EDGE_LABEL_ALWAYS_MAX ? "always" : "hover-only";
   return edges.map((e, i) => ({
     id: `e-${e.source}-${e.target}-${i}`,
     source: String(e.source),
     target: String(e.target),
-    type: "smoothstep",
-    label: e.weight.toFixed(2),
-    markerEnd: { type: MarkerType.ArrowClosed, color: "hsl(var(--muted-foreground))" },
+    type: "influence",
+    data: { weight: e.weight, labelMode },
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      color: "#7d8590",
+      width: 22,
+      height: 22,
+    },
     style: {
-      stroke: "hsl(var(--muted-foreground) / 0.65)",
-      strokeWidth: 1 + e.weight * 4,
+      stroke: "#6e7681",
+      strokeWidth: Math.max(1.25, 1.25 + e.weight * 3.5),
     },
   }));
 }
@@ -204,11 +367,11 @@ export function SimulationNetworkPanel({ simulationId }: { simulationId: number 
   });
   const [selectedId, setSelectedId] = useState<number | null>(null);
 
-  const dims = { w: 720, h: 480 };
+  const dims = { w: 760, h: 520 };
 
   const nodes = useMemo(() => {
     if (!graph?.nodes.length) return [];
-    return layoutCircle(graph.nodes, dims.w, dims.h);
+    return layoutGraphRings(graph.nodes, dims.w, dims.h);
   }, [graph?.nodes]);
 
   const edges = useMemo(() => (graph?.edges.length ? buildEdges(graph.edges) : []), [graph?.edges]);
@@ -292,37 +455,112 @@ export function SimulationNetworkPanel({ simulationId }: { simulationId: number 
             {graph.posts.length} posts · {graph.comments.length} comments
           </span>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Arrows show who influences whom (thicker = stronger weight). Click an agent to see their activity
-          and connections.
-        </p>
-        <div className="h-[480px] w-full rounded-2xl border border-border overflow-hidden bg-[hsl(220_16%_8%)]">
-          {nodes.length === 0 ? (
-            <div className="h-full flex items-center justify-center text-muted-foreground text-sm">
-              No agents in this simulation.
+        <div className="overflow-hidden rounded-2xl border border-[#30363d] bg-[#0d1117] shadow-[0_0_0_1px_rgba(255,255,255,0.06),0_24px_48px_rgba(0,0,0,0.35)]">
+          <div className="flex items-center justify-between gap-3 border-b border-[#21262d] bg-[#161b22] px-4 py-2.5">
+            <div className="flex items-center gap-2">
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#21262d] text-[#58a6ff] ring-1 ring-[#30363d]">
+                <Database className="h-4 w-4" aria-hidden />
+              </span>
+              <div>
+                <div className="text-xs font-semibold tracking-tight text-[#e6edf3]">
+                  Graph · Influence network
+                </div>
+                <div className="text-[10px] text-[#8b949e]">
+                  Neo4j-style view · directed relationships
+                </div>
+              </div>
             </div>
-          ) : (
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              onNodeClick={onNodeClick}
-              fitView
-              fitViewOptions={{ padding: 0.15 }}
-              minZoom={0.4}
-              maxZoom={1.5}
-              proOptions={{ hideAttribution: true }}
-              className="!bg-transparent"
-            >
-              <Background gap={16} size={1} color="hsl(var(--border))" />
-              <Controls className="!bg-card !border-border !shadow-lg" />
-              <MiniMap
-                className="!bg-card !border-border rounded-lg"
-                nodeColor={() => "hsl(var(--primary) / 0.5)"}
-                maskColor="hsl(0 0% 0% / 0.75)"
-              />
-            </ReactFlow>
-          )}
+            <div className="hidden md:flex flex-col items-end gap-1.5">
+              <div className="flex flex-wrap justify-end gap-x-3 gap-y-1 text-[9px] text-[#8b949e]">
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-[#3fb950] ring-1 ring-[#30363d]" />
+                  supportive
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-[#f85149] ring-1 ring-[#30363d]" />
+                  opposed
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-[#8b949e] ring-1 ring-[#30363d]" />
+                  neutral
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-2 w-2 rounded-full bg-[#a371f7] ring-1 ring-[#30363d]" />
+                  radical
+                </span>
+              </div>
+              <div className="flex gap-2 text-[10px] text-[#8b949e]">
+                <span className="rounded border border-[#30363d] bg-[#0d1117] px-2 py-0.5 font-mono">
+                  :Agent
+                </span>
+                <span className="rounded border border-[#30363d] bg-[#0d1117] px-2 py-0.5 font-mono">
+                  INFLUENCES
+                </span>
+              </div>
+            </div>
+          </div>
+          <p className="border-b border-[#21262d] bg-[#0d1117] px-4 py-2 text-[11px] leading-relaxed text-[#8b949e]">
+            Nodes show initials + id (full name in tooltip). Drag to pan · scroll to zoom · thicker links =
+            stronger weight · click a node for the inspector.
+            {graph.edges.length > EDGE_LABEL_ALWAYS_MAX ? (
+              <span className="mt-1 block font-medium text-[#58a6ff]">
+                Hover any link to read its influence weight ({graph.edges.length} links — labels hide when dense).
+              </span>
+            ) : null}
+          </p>
+          <div className="h-[520px] w-full">
+            {nodes.length === 0 ? (
+              <div className="flex h-full items-center justify-center bg-[#0d1117] text-sm text-[#8b949e]">
+                No agents in this simulation.
+              </div>
+            ) : (
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
+                onNodeClick={onNodeClick}
+                nodesDraggable={false}
+                nodesConnectable={false}
+                elevateNodesOnSelect
+                fitView
+                fitViewOptions={{ padding: 0.22 }}
+                minZoom={0.2}
+                maxZoom={1.85}
+                proOptions={{ hideAttribution: true }}
+                className="neo4j-graph-view !bg-[#0d1117]"
+                defaultEdgeOptions={{ zIndex: 0 }}
+              >
+                <Background
+                  id="neo-dots"
+                  variant={BackgroundVariant.Dots}
+                  gap={22}
+                  size={1.2}
+                  color="#30363d"
+                />
+                <Controls showInteractive={false} />
+                <MiniMap
+                  position="bottom-right"
+                  pannable
+                  zoomable
+                  nodeStrokeWidth={2}
+                  nodeStrokeColor="#30363d"
+                  nodeColor={(n) => {
+                    const stance = (n.data as AgentNodeData | undefined)?.stance ?? "neutral";
+                    const map: Record<string, string> = {
+                      supportive: "#3fb950",
+                      opposed: "#f85149",
+                      neutral: "#8b949e",
+                      radical: "#a371f7",
+                    };
+                    return map[stance] ?? map.neutral;
+                  }}
+                  maskColor="rgba(1, 4, 9, 0.85)"
+                  className="!m-3"
+                />
+              </ReactFlow>
+            )}
+          </div>
         </div>
       </div>
 

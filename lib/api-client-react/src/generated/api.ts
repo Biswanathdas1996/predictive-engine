@@ -26,6 +26,7 @@ import type {
   CreatePolicyBody,
   CreateSimulationBody,
   Event,
+  GetPolicyAttachment404,
   GetSimulationPostsParams,
   Group,
   HealthStatus,
@@ -1504,6 +1505,106 @@ export const useCreatePolicy = <
 > => {
   return useMutation(getCreatePolicyMutationOptions(options));
 };
+
+/**
+ * Returns the stored bytes for a file attached when the policy was created (same filename and content as upload).
+ * @summary View or download original uploaded document
+ */
+export const getGetPolicyAttachmentUrl = (id: number, attachmentId: number) => {
+  return `/api/policies/${id}/attachments/${attachmentId}`;
+};
+
+export const getPolicyAttachment = async (
+  id: number,
+  attachmentId: number,
+  options?: RequestInit,
+): Promise<Blob> => {
+  return customFetch<Blob>(getGetPolicyAttachmentUrl(id, attachmentId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getGetPolicyAttachmentQueryKey = (
+  id: number,
+  attachmentId: number,
+) => {
+  return [`/api/policies/${id}/attachments/${attachmentId}`] as const;
+};
+
+export const getGetPolicyAttachmentQueryOptions = <
+  TData = Awaited<ReturnType<typeof getPolicyAttachment>>,
+  TError = ErrorType<GetPolicyAttachment404>,
+>(
+  id: number,
+  attachmentId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPolicyAttachment>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getGetPolicyAttachmentQueryKey(id, attachmentId);
+
+  const queryFn: QueryFunction<
+    Awaited<ReturnType<typeof getPolicyAttachment>>
+  > = ({ signal }) =>
+    getPolicyAttachment(id, attachmentId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!(id && attachmentId),
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof getPolicyAttachment>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type GetPolicyAttachmentQueryResult = NonNullable<
+  Awaited<ReturnType<typeof getPolicyAttachment>>
+>;
+export type GetPolicyAttachmentQueryError = ErrorType<GetPolicyAttachment404>;
+
+/**
+ * @summary View or download original uploaded document
+ */
+
+export function useGetPolicyAttachment<
+  TData = Awaited<ReturnType<typeof getPolicyAttachment>>,
+  TError = ErrorType<GetPolicyAttachment404>,
+>(
+  id: number,
+  attachmentId: number,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof getPolicyAttachment>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getGetPolicyAttachmentQueryOptions(
+    id,
+    attachmentId,
+    options,
+  );
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
 
 /**
  * @summary List all groups

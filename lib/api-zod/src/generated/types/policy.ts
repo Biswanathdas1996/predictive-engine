@@ -5,10 +5,13 @@
  * Policy-Grounded Multi-Agent Prediction Engine API
  * OpenAPI spec version: 0.1.0
  */
+import type { PolicyAttachmentRef } from "./policyAttachmentRef";
 
 export interface Policy {
   id: number;
   title: string;
   summary: string;
   createdAt: Date;
+  /** Original uploaded files (when created via multipart upload); empty for JSON-only policies */
+  attachments?: PolicyAttachmentRef[];
 }

@@ -53,6 +53,9 @@ export default defineConfig({
       "/api": {
         target: `http://127.0.0.1:${process.env.API_PORT ?? "3000"}`,
         changeOrigin: true,
+        // Long-running policy upload + Vertex AI page calls
+        timeout: 600_000,
+        proxyTimeout: 600_000,
       },
     },
     fs: {

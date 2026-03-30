@@ -90,13 +90,30 @@ def comment_row(r: asyncpg.Record, *, agent_name: str) -> dict[str, Any]:
     }
 
 
-def policy_row(r: asyncpg.Record) -> dict[str, Any]:
+def policy_attachment_meta_row(r: asyncpg.Record) -> dict[str, Any]:
     return {
+        "id": r["id"],
+        "policyId": r["policy_id"],
+        "filename": r["filename"],
+        "contentType": r["content_type"],
+        "size": int(r["size"] or 0),
+    }
+
+
+def policy_row(
+    r: asyncpg.Record,
+    *,
+    attachments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "id": r["id"],
         "title": r["title"],
         "summary": r["summary"],
         "createdAt": _dt(r["created_at"]),
     }
+    if attachments is not None:
+        out["attachments"] = attachments
+    return out
 
 
 def group_row(r: asyncpg.Record) -> dict[str, Any]:

@@ -13,10 +13,12 @@ app/routers/health.py
 app/routers/policies.py
 app/routers/simulations.py
 app/services/__init__.py
+app/services/document_text.py
 app/services/llm_service.py
 app/services/neo4j_service.py
 app/services/prompt_templates.py
 app/services/simulation_engine.py
+app/services/vertex_document.py
 predictive_api.egg-info/PKG-INFO
 predictive_api.egg-info/SOURCES.txt
 predictive_api.egg-info/dependency_links.txt

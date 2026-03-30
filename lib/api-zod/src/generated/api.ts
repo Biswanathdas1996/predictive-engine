@@ -426,6 +426,20 @@ export const ListPoliciesResponseItem = zod.object({
   title: zod.string(),
   summary: zod.string(),
   createdAt: zod.coerce.date(),
+  attachments: zod
+    .array(
+      zod.object({
+        id: zod.number(),
+        policyId: zod.number(),
+        filename: zod.string(),
+        contentType: zod.string().nullish(),
+        size: zod.number().describe("Size in bytes"),
+      }),
+    )
+    .optional()
+    .describe(
+      "Original uploaded files (when created via multipart upload); empty for JSON-only policies",
+    ),
 });
 export const ListPoliciesResponse = zod.array(ListPoliciesResponseItem);
 
@@ -435,6 +449,15 @@ export const ListPoliciesResponse = zod.array(ListPoliciesResponseItem);
 export const CreatePolicyBody = zod.object({
   title: zod.string(),
   summary: zod.string(),
+});
+
+/**
+ * Returns the stored bytes for a file attached when the policy was created (same filename and content as upload).
+ * @summary View or download original uploaded document
+ */
+export const GetPolicyAttachmentParams = zod.object({
+  id: zod.coerce.number(),
+  attachmentId: zod.coerce.number(),
 });
 
 /**

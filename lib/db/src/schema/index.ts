@@ -1,5 +1,6 @@
 export * from "./groups";
 export * from "./policies";
+export * from "./policy_attachments";
 export * from "./simulations";
 export * from "./agents";
 export * from "./posts";

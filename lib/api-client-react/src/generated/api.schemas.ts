@@ -207,11 +207,22 @@ export interface SimulationGraphView {
   comments: GraphComment[];
 }
 
+export interface PolicyAttachmentRef {
+  id: number;
+  policyId: number;
+  filename: string;
+  contentType?: string | null;
+  /** Size in bytes */
+  size: number;
+}
+
 export interface Policy {
   id: number;
   title: string;
   summary: string;
   createdAt: string;
+  /** Original uploaded files (when created via multipart upload); empty for JSON-only policies */
+  attachments?: PolicyAttachmentRef[];
 }
 
 export interface CreatePolicyBody {
@@ -353,6 +364,12 @@ export type ListAgentsParams = {
 
 export type GetSimulationPostsParams = {
   limit?: number;
+};
+
+export type GetPolicyAttachment404Detail = { [key: string]: unknown };
+
+export type GetPolicyAttachment404 = {
+  detail?: GetPolicyAttachment404Detail;
 };
 
 export type ListEventsParams = {

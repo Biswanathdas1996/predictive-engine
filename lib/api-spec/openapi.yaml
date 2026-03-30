@@ -326,6 +326,41 @@ paths:
               schema:
                 $ref: "#/components/schemas/Policy"
 
+  /policies/{id}/attachments/{attachmentId}:
+    get:
+      operationId: getPolicyAttachment
+      tags: [policies]
+      summary: View or download original uploaded document
+      description: Returns the stored bytes for a file attached when the policy was created (same filename and content as upload).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: attachmentId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Original file (Content-Type and Content-Disposition set from upload)
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Policy or attachment not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: object
+
   /groups:
     get:
       operationId: listGroups
@@ -889,6 +924,27 @@ components:
         - posts
         - comments
 
+    PolicyAttachmentRef:
+      type: object
+      properties:
+        id:
+          type: integer
+        policyId:
+          type: integer
+        filename:
+          type: string
+        contentType:
+          type: string
+          nullable: true
+        size:
+          type: integer
+          description: Size in bytes
+      required:
+        - id
+        - policyId
+        - filename
+        - size
+
     Policy:
       type: object
       properties:
@@ -901,6 +957,11 @@ components:
         createdAt:
           type: string
           format: date-time
+        attachments:
+          type: array
+          description: Original uploaded files (when created via multipart upload); empty for JSON-only policies
+          items:
+            $ref: "#/components/schemas/PolicyAttachmentRef"
       required:
         - id
         - title
