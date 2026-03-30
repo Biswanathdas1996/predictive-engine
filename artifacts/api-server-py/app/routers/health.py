@@ -29,6 +29,6 @@ async def service_status() -> dict[str, str]:
         "database": database,
         "neo4j": get_neo4j_status(),
         "llm": "available" if is_llm_available() else "unavailable",
-        "llmBackend": llm_extra["llmBackend"],
-        "llmModel": llm_extra["llmModel"],
+        "llmBackend": llm_extra["llmBackend"] or "",
+        "llmModel": llm_extra["llmModel"] or "",
     }
