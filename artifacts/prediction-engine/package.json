@@ -75,6 +75,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
-    "@xyflow/react": "^12.10.2"
+    "@xyflow/react": "^12.10.2",
+    "mermaid": "^11.13.0"
   }
 }

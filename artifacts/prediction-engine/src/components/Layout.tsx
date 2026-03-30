@@ -1,14 +1,15 @@
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
-import { 
-  LayoutDashboard, 
-  Users, 
-  Activity, 
-  BarChart2, 
-  FileText, 
-  FileBadge, 
+import {
+  LayoutDashboard,
+  Users,
+  Activity,
+  BarChart2,
+  FileText,
+  FileBadge,
   Network,
-  AlertTriangle
+  AlertTriangle,
+  Boxes,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +22,7 @@ const NAV_ITEMS = [
   { href: "/policies", label: "Policies", icon: FileBadge },
   { href: "/groups", label: "Groups", icon: Network },
   { href: "/events", label: "Events", icon: AlertTriangle },
+  { href: "/architecture", label: "Architecture", icon: Boxes },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {

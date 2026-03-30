@@ -14,6 +14,7 @@ import Reports from "./pages/Reports";
 import Policies from "./pages/Policies";
 import Groups from "./pages/Groups";
 import Events from "./pages/Events";
+import Architecture from "./pages/Architecture";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -37,6 +38,7 @@ function Router() {
         <Route path="/policies" component={Policies} />
         <Route path="/groups" component={Groups} />
         <Route path="/events" component={Events} />
+        <Route path="/architecture" component={Architecture} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
