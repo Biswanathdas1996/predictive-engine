@@ -1,0 +1,20 @@
+packages:
+  "recharts": "Data visualization for belief evolution and Monte Carlo distributions"
+  "framer-motion": "Smooth entry animations and page transitions"
+  "date-fns": "Human-readable date formatting"
+  "lucide-react": "Icons for the dashboard navigation and UI"
+  "clsx": "Utility for constructing className strings conditionally"
+  "tailwind-merge": "Utility for merging tailwind classes without style conflicts"
+
+images:
+  - path: "artifacts/prediction-engine/public/images/logo.png"
+    description: "Minimalist, futuristic logo for an AI prediction engine. Deep dark blue background, glowing electric cyan and purple neural network nodes forming an abstract eye or brain. Highly professional, enterprise software aesthetic."
+    aspect_ratio: "1:1"
+  - path: "artifacts/prediction-engine/public/images/hero-bg.png"
+    description: "Abstract dark mode background for a data dashboard. Deep slate and navy blues with subtle glowing grid lines, data points, and soft electric blue light leaks. Very subtle, meant to sit behind UI components."
+    aspect_ratio: "16:9"
+
+notes:
+  - Expects React Query hooks imported from @workspace/api-client-react
+  - Assumes standard REST JSON endpoints on /api/
+  - Theme is deeply integrated into index.css using Tailwind v4 @theme inline

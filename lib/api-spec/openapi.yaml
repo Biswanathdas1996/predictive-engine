@@ -3,13 +3,28 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Policy-Grounded Multi-Agent Prediction Engine API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: agents
+    description: Agent management
+  - name: simulations
+    description: Simulation management
+  - name: posts
+    description: Social simulation posts
+  - name: groups
+    description: Agent groups
+  - name: policies
+    description: Policy management
+  - name: montecarlo
+    description: Monte Carlo simulation engine
+  - name: reports
+    description: Prediction reports
+
 paths:
   /healthz:
     get:
@@ -24,6 +39,412 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /agents:
+    get:
+      operationId: listAgents
+      tags: [agents]
+      summary: List all agents
+      parameters:
+        - name: simulationId
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Agent"
+    post:
+      operationId: createAgent
+      tags: [agents]
+      summary: Create a new agent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgentBody"
+      responses:
+        "201":
+          description: Agent created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+
+  /agents/{id}:
+    get:
+      operationId: getAgent
+      tags: [agents]
+      summary: Get agent by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Agent details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+    patch:
+      operationId: updateAgent
+      tags: [agents]
+      summary: Update agent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAgentBody"
+      responses:
+        "200":
+          description: Agent updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Agent"
+    delete:
+      operationId: deleteAgent
+      tags: [agents]
+      summary: Delete agent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Agent deleted
+
+  /agents/{id}/neighborhood:
+    get:
+      operationId: getAgentNeighborhood
+      tags: [agents]
+      summary: Get agent neighborhood graph
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Agent neighborhood
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentNeighborhood"
+
+  /simulations:
+    get:
+      operationId: listSimulations
+      tags: [simulations]
+      summary: List all simulations
+      responses:
+        "200":
+          description: List of simulations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Simulation"
+    post:
+      operationId: createSimulation
+      tags: [simulations]
+      summary: Create a new simulation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSimulationBody"
+      responses:
+        "201":
+          description: Simulation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Simulation"
+
+  /simulations/{id}:
+    get:
+      operationId: getSimulation
+      tags: [simulations]
+      summary: Get simulation by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Simulation details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Simulation"
+    delete:
+      operationId: deleteSimulation
+      tags: [simulations]
+      summary: Delete simulation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Simulation deleted
+
+  /simulations/{id}/run:
+    post:
+      operationId: runSimulationRound
+      tags: [simulations]
+      summary: Run a simulation round
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Round results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimulationRoundResult"
+
+  /simulations/{id}/posts:
+    get:
+      operationId: getSimulationPosts
+      tags: [posts]
+      summary: Get posts for a simulation
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: List of posts
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Post"
+
+  /policies:
+    get:
+      operationId: listPolicies
+      tags: [policies]
+      summary: List all policies
+      responses:
+        "200":
+          description: List of policies
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Policy"
+    post:
+      operationId: createPolicy
+      tags: [policies]
+      summary: Create a policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePolicyBody"
+      responses:
+        "201":
+          description: Policy created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Policy"
+
+  /groups:
+    get:
+      operationId: listGroups
+      tags: [groups]
+      summary: List all groups
+      responses:
+        "200":
+          description: List of groups
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Group"
+    post:
+      operationId: createGroup
+      tags: [groups]
+      summary: Create a group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGroupBody"
+      responses:
+        "201":
+          description: Group created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Group"
+
+  /montecarlo/{simulationId}:
+    post:
+      operationId: runMonteCarlo
+      tags: [montecarlo]
+      summary: Run Monte Carlo simulation
+      parameters:
+        - name: simulationId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MonteCarloConfig"
+      responses:
+        "200":
+          description: Monte Carlo results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MonteCarloResult"
+
+  /montecarlo/{simulationId}/runs:
+    get:
+      operationId: getMonteCarloRuns
+      tags: [montecarlo]
+      summary: Get Monte Carlo run history
+      parameters:
+        - name: simulationId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Monte Carlo run history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MonteCarloRun"
+
+  /reports/{simulationId}:
+    get:
+      operationId: getSimulationReport
+      tags: [reports]
+      summary: Get prediction report for a simulation
+      parameters:
+        - name: simulationId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Prediction report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PredictionReport"
+
+  /influences:
+    post:
+      operationId: createInfluence
+      tags: [agents]
+      summary: Create influence relationship between agents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateInfluenceBody"
+      responses:
+        "201":
+          description: Influence created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Influence"
+
+  /events:
+    get:
+      operationId: listEvents
+      tags: [simulations]
+      summary: List all events
+      parameters:
+        - name: simulationId
+          in: query
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: List of events
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Event"
+    post:
+      operationId: createEvent
+      tags: [simulations]
+      summary: Create an event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateEventBody"
+      responses:
+        "201":
+          description: Event created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Event"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +455,638 @@ components:
       required:
         - status
 
+    Agent:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        age:
+          type: integer
+        gender:
+          type: string
+        region:
+          type: string
+        occupation:
+          type: string
+        persona:
+          type: string
+        stance:
+          type: string
+        influenceScore:
+          type: number
+        credibilityScore:
+          type: number
+        beliefState:
+          $ref: "#/components/schemas/BeliefState"
+        confidenceLevel:
+          type: number
+        activityLevel:
+          type: number
+        groupId:
+          type: ["integer", "null"]
+        simulationId:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - age
+        - gender
+        - region
+        - occupation
+        - persona
+        - stance
+        - influenceScore
+        - credibilityScore
+        - beliefState
+        - confidenceLevel
+        - activityLevel
+        - createdAt
+
+    BeliefState:
+      type: object
+      properties:
+        policySupport:
+          type: number
+        trustInGovernment:
+          type: number
+        economicOutlook:
+          type: number
+      required:
+        - policySupport
+        - trustInGovernment
+        - economicOutlook
+
+    CreateAgentBody:
+      type: object
+      properties:
+        name:
+          type: string
+        age:
+          type: integer
+        gender:
+          type: string
+        region:
+          type: string
+        occupation:
+          type: string
+        persona:
+          type: string
+        stance:
+          type: string
+        influenceScore:
+          type: number
+        credibilityScore:
+          type: number
+        beliefState:
+          $ref: "#/components/schemas/BeliefState"
+        confidenceLevel:
+          type: number
+        activityLevel:
+          type: number
+        groupId:
+          type: ["integer", "null"]
+        simulationId:
+          type: ["integer", "null"]
+      required:
+        - name
+        - age
+        - gender
+        - region
+        - occupation
+        - persona
+        - stance
+
+    UpdateAgentBody:
+      type: object
+      properties:
+        name:
+          type: string
+        stance:
+          type: string
+        beliefState:
+          $ref: "#/components/schemas/BeliefState"
+        confidenceLevel:
+          type: number
+        activityLevel:
+          type: number
+        influenceScore:
+          type: number
+        credibilityScore:
+          type: number
+
+    Simulation:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        status:
+          type: string
+        currentRound:
+          type: integer
+        totalAgents:
+          type: integer
+        totalPosts:
+          type: integer
+        config:
+          $ref: "#/components/schemas/SimulationConfig"
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - description
+        - status
+        - currentRound
+        - totalAgents
+        - totalPosts
+        - config
+        - createdAt
+
+    SimulationConfig:
+      type: object
+      properties:
+        learningRate:
+          type: number
+        numRounds:
+          type: integer
+        agentCount:
+          type: integer
+        policyId:
+          type: ["integer", "null"]
+      required:
+        - learningRate
+        - numRounds
+        - agentCount
+
+    CreateSimulationBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        config:
+          $ref: "#/components/schemas/SimulationConfig"
+      required:
+        - name
+        - description
+        - config
+
+    SimulationRoundResult:
+      type: object
+      properties:
+        round:
+          type: integer
+        postsGenerated:
+          type: integer
+        beliefsUpdated:
+          type: integer
+        averageSentiment:
+          type: number
+        averagePolicySupport:
+          type: number
+        agentStates:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentRoundState"
+      required:
+        - round
+        - postsGenerated
+        - beliefsUpdated
+        - averageSentiment
+        - averagePolicySupport
+        - agentStates
+
+    AgentRoundState:
+      type: object
+      properties:
+        agentId:
+          type: integer
+        name:
+          type: string
+        policySupport:
+          type: number
+        confidenceLevel:
+          type: number
+        action:
+          type: string
+        sentiment:
+          type: number
+      required:
+        - agentId
+        - name
+        - policySupport
+        - confidenceLevel
+        - action
+        - sentiment
+
+    Post:
+      type: object
+      properties:
+        id:
+          type: integer
+        content:
+          type: string
+        sentiment:
+          type: number
+        platform:
+          type: string
+        topicTags:
+          type: array
+          items:
+            type: string
+        round:
+          type: integer
+        agentId:
+          type: integer
+        agentName:
+          type: string
+        simulationId:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - content
+        - sentiment
+        - platform
+        - round
+        - agentId
+        - agentName
+        - simulationId
+        - createdAt
+
+    Policy:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        summary:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - title
+        - summary
+        - createdAt
+
+    CreatePolicyBody:
+      type: object
+      properties:
+        title:
+          type: string
+        summary:
+          type: string
+      required:
+        - title
+        - summary
+
+    Group:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - name
+        - description
+        - createdAt
+
+    CreateGroupBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+      required:
+        - name
+        - description
+
+    MonteCarloConfig:
+      type: object
+      properties:
+        numRuns:
+          type: integer
+          default: 50
+        roundsPerRun:
+          type: integer
+          default: 5
+      required:
+        - numRuns
+        - roundsPerRun
+
+    MonteCarloResult:
+      type: object
+      properties:
+        meanSupport:
+          type: number
+        variance:
+          type: number
+        min:
+          type: number
+        max:
+          type: number
+        confidenceInterval:
+          type: array
+          items:
+            type: number
+        distribution:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonteCarloRunResult"
+      required:
+        - meanSupport
+        - variance
+        - min
+        - max
+        - confidenceInterval
+        - distribution
+
+    MonteCarloRunResult:
+      type: object
+      properties:
+        runIndex:
+          type: integer
+        policySupport:
+          type: number
+        publicSentiment:
+          type: number
+        engagement:
+          type: integer
+        seed:
+          type: integer
+      required:
+        - runIndex
+        - policySupport
+        - publicSentiment
+        - engagement
+        - seed
+
+    MonteCarloRun:
+      type: object
+      properties:
+        id:
+          type: integer
+        simulationId:
+          type: integer
+        numRuns:
+          type: integer
+        meanSupport:
+          type: number
+        variance:
+          type: number
+        minSupport:
+          type: number
+        maxSupport:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - simulationId
+        - numRuns
+        - meanSupport
+        - variance
+        - minSupport
+        - maxSupport
+        - createdAt
+
+    PredictionReport:
+      type: object
+      properties:
+        simulationId:
+          type: integer
+        simulationName:
+          type: string
+        generatedAt:
+          type: string
+          format: date-time
+        keyOutcomes:
+          type: array
+          items:
+            $ref: "#/components/schemas/KeyOutcome"
+        riskFactors:
+          type: array
+          items:
+            type: string
+        influentialAgents:
+          type: array
+          items:
+            $ref: "#/components/schemas/InfluentialAgent"
+        causalDrivers:
+          type: array
+          items:
+            type: string
+        monteCarloSummary:
+          $ref: "#/components/schemas/MonteCarloSummary"
+        beliefEvolution:
+          type: array
+          items:
+            $ref: "#/components/schemas/BeliefEvolutionPoint"
+      required:
+        - simulationId
+        - simulationName
+        - generatedAt
+        - keyOutcomes
+        - riskFactors
+        - influentialAgents
+        - causalDrivers
+        - monteCarloSummary
+        - beliefEvolution
+
+    KeyOutcome:
+      type: object
+      properties:
+        label:
+          type: string
+        probability:
+          type: number
+        impact:
+          type: string
+      required:
+        - label
+        - probability
+        - impact
+
+    InfluentialAgent:
+      type: object
+      properties:
+        agentId:
+          type: integer
+        name:
+          type: string
+        influenceScore:
+          type: number
+        stance:
+          type: string
+      required:
+        - agentId
+        - name
+        - influenceScore
+        - stance
+
+    MonteCarloSummary:
+      type: object
+      properties:
+        totalRuns:
+          type: integer
+        meanSupport:
+          type: number
+        variance:
+          type: number
+        confidenceInterval:
+          type: array
+          items:
+            type: number
+      required:
+        - totalRuns
+        - meanSupport
+        - variance
+        - confidenceInterval
+
+    BeliefEvolutionPoint:
+      type: object
+      properties:
+        round:
+          type: integer
+        averagePolicySupport:
+          type: number
+        averageTrustInGovernment:
+          type: number
+        averageEconomicOutlook:
+          type: number
+      required:
+        - round
+        - averagePolicySupport
+        - averageTrustInGovernment
+        - averageEconomicOutlook
+
+    Influence:
+      type: object
+      properties:
+        id:
+          type: integer
+        sourceAgentId:
+          type: integer
+        targetAgentId:
+          type: integer
+        weight:
+          type: number
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - sourceAgentId
+        - targetAgentId
+        - weight
+        - createdAt
+
+    CreateInfluenceBody:
+      type: object
+      properties:
+        sourceAgentId:
+          type: integer
+        targetAgentId:
+          type: integer
+        weight:
+          type: number
+      required:
+        - sourceAgentId
+        - targetAgentId
+        - weight
+
+    Event:
+      type: object
+      properties:
+        id:
+          type: integer
+        type:
+          type: string
+        description:
+          type: string
+        impactScore:
+          type: number
+        simulationId:
+          type: ["integer", "null"]
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - type
+        - description
+        - impactScore
+        - createdAt
+
+    CreateEventBody:
+      type: object
+      properties:
+        type:
+          type: string
+        description:
+          type: string
+        impactScore:
+          type: number
+        simulationId:
+          type: ["integer", "null"]
+      required:
+        - type
+        - description
+        - impactScore
+
+    AgentNeighborhood:
+      type: object
+      properties:
+        agent:
+          $ref: "#/components/schemas/Agent"
+        connections:
+          type: array
+          items:
+            $ref: "#/components/schemas/NeighborConnection"
+        posts:
+          type: array
+          items:
+            $ref: "#/components/schemas/Post"
+      required:
+        - agent
+        - connections
+        - posts
+
+    NeighborConnection:
+      type: object
+      properties:
+        agent:
+          $ref: "#/components/schemas/Agent"
+        influenceWeight:
+          type: number
+        direction:
+          type: string
+      required:
+        - agent
+        - influenceWeight
+        - direction
