@@ -60,9 +60,35 @@ type AgentNodeData = {
   stance: string;
   policySupport: number;
   influenceScore: number;
+  age?: number;
+  gender?: string;
+  region?: string;
+  occupation?: string;
   /** SSE run-stream: this agent’s turn in the generation batch */
   streamHighlighted?: boolean;
 };
+
+/** Graph API may return profile fields beyond the generated OpenAPI type. */
+type SimulationGraphNodeWithProfile = SimulationGraphNode & {
+  age?: unknown;
+  gender?: string | null;
+  region?: string | null;
+  occupation?: string | null;
+};
+
+function formatAgentProfileMeta(d: Pick<AgentNodeData, "age" | "gender" | "region" | "occupation">): string | null {
+  const parts: string[] = [];
+  if (typeof d.age === "number" && Number.isFinite(d.age)) parts.push(String(d.age));
+  const g = (d.gender ?? "").trim();
+  if (g && g !== "—") {
+    parts.push(g.length > 1 ? g.charAt(0).toUpperCase() + g.slice(1).toLowerCase() : g.toUpperCase());
+  }
+  const r = (d.region ?? "").trim();
+  if (r && r !== "—") parts.push(r);
+  const o = (d.occupation ?? "").trim();
+  if (o && o !== "—") parts.push(o);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
 
 const stanceConfig: Record<string, { color: string; glow: string; label: string }> = {
   supportive: { color: "#22c55e", glow: "rgba(34, 197, 94, 0.4)", label: "Supportive" },
@@ -78,40 +104,52 @@ const AgentNode = memo(function AgentNode({ data, selected }: NodeProps) {
   const cfg = stanceConfig[d.stance] ?? stanceConfig.neutral;
   const streamOn = Boolean(d.streamHighlighted);
   const size = 44;
-  const iconSize = Math.round(size * 0.5);
+  const iconSize = Math.round(size * 0.44);
+  const profileMeta = formatAgentProfileMeta(d);
+  const surfaceTitle = [d.label, profileMeta].filter(Boolean).join("\n");
+
+  const outerClass = [
+    "graph-node-outer",
+    streamOn && "graph-node-stream-active",
+    selected && "graph-node-selected",
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
-    <div className={`graph-node-outer${streamOn ? " graph-node-stream-active" : ""}`}>
+    <div
+      className={outerClass}
+      style={
+        {
+          "--graph-node-stance": cfg.color,
+          "--graph-node-glow": cfg.glow,
+        } as CSSProperties
+      }
+    >
       <Handle type="target" position={Position.Top} />
       <Handle type="target" position={Position.Left} id="in-l" />
       <Handle type="target" position={Position.Right} id="in-r" />
 
-      <div
-        className="graph-node-ring"
-        style={{
-          width: size,
-          height: size,
-          background: `linear-gradient(135deg, ${cfg.color}, ${cfg.color}cc)`,
-          boxShadow: streamOn
-            ? undefined
-            : selected
-              ? `0 0 0 3px ${cfg.color}60, 0 0 20px ${cfg.glow}, 0 4px 16px rgba(0,0,0,0.4)`
-              : `0 0 12px ${cfg.glow}, 0 2px 8px rgba(0,0,0,0.3)`,
-          border: `2px solid ${selected && !streamOn ? cfg.color : "rgba(255,255,255,0.15)"}`,
-        }}
-      >
-        <div className="graph-node-glow" style={{ background: cfg.glow }} />
-        <User
-          size={iconSize}
-          strokeWidth={2.5}
-          className="graph-node-user-icon"
-          aria-hidden
-        />
-      </div>
+      <div className="graph-node-surface" title={surfaceTitle}>
+        <div className="graph-node-accent" aria-hidden />
+        <div className="graph-node-body">
+          <div className="graph-node-ring" style={{ width: size, height: size }}>
+            <span className="graph-node-ring-shine" aria-hidden />
+            <div className="graph-node-glow" />
+            <User
+              size={iconSize}
+              strokeWidth={2}
+              className="graph-node-user-icon"
+              aria-hidden
+            />
+          </div>
 
-      <span className="graph-node-label" title={d.label}>
-        {d.label}
-      </span>
+          <div className="graph-node-text-stack">
+            <span className="graph-node-label">{d.label}</span>
+            {profileMeta ? <span className="graph-node-meta">{profileMeta}</span> : null}
+          </div>
+        </div>
+      </div>
 
       <Handle type="source" position={Position.Bottom} />
       <Handle type="source" position={Position.Left} id="out-l" />
@@ -210,6 +248,17 @@ const edgeTypes = { influence: InfluenceEdge };
 /* ─── Layout ─── */
 
 const NODES_PER_RING = 14;
+/** Match `.graph-node-surface` max-width + padding so ring math matches on-screen cards. */
+const LAYOUT_NODE_WIDTH = 228;
+const LAYOUT_NODE_HEIGHT = 100;
+const LAYOUT_NODE_GAP = 24;
+
+/** Minimum ring radius so adjacent node centers are far enough apart (chord ≥ card width + gap). */
+function minRingRadiusForCount(count: number): number {
+  if (count <= 1) return 0;
+  const minChord = LAYOUT_NODE_WIDTH + LAYOUT_NODE_GAP;
+  return minChord / (2 * Math.sin(Math.PI / count));
+}
 
 function layoutGraphForce(
   nodes: SimulationGraphNode[],
@@ -222,7 +271,6 @@ function layoutGraphForce(
 
   const cx = width / 2;
   const cy = height / 2;
-  const minDim = Math.min(width, height);
 
   const connMap = new Map<number, number>();
   for (const e of edges) {
@@ -241,37 +289,52 @@ function layoutGraphForce(
     rings.push(sorted.slice(i, i + NODES_PER_RING));
   }
 
-  const baseR = minDim * 0.14;
-  const step = minDim * 0.13;
-
+  const radialStep = LAYOUT_NODE_HEIGHT + LAYOUT_NODE_GAP;
   const positions: { x: number; y: number }[] = [];
+  let ringRadius = 0;
+
   rings.forEach((ringNodes, ringIdx) => {
     const count = ringNodes.length;
-    const r = baseR + ringIdx * step;
-    const angleOffset = ringIdx * 0.3;
+    const neededForAngles = minRingRadiusForCount(count);
+    if (ringIdx === 0) {
+      ringRadius = neededForAngles;
+    } else {
+      ringRadius = Math.max(neededForAngles, ringRadius + radialStep);
+    }
+
+    const angleOffset = ringIdx * 0.35;
     ringNodes.forEach((_, i) => {
-      const angle = (2 * Math.PI * i) / Math.max(count, 1) - Math.PI / 2 + angleOffset;
-      const jitterX = (Math.random() - 0.5) * 20;
-      const jitterY = (Math.random() - 0.5) * 20;
+      if (count === 1 && ringRadius === 0) {
+        positions.push({ x: cx, y: cy });
+        return;
+      }
+      const angle = (2 * Math.PI * i) / count - Math.PI / 2 + angleOffset;
       positions.push({
-        x: cx + r * Math.cos(angle) + jitterX,
-        y: cy + r * Math.sin(angle) + jitterY,
+        x: cx + ringRadius * Math.cos(angle),
+        y: cy + ringRadius * Math.sin(angle),
       });
     });
   });
 
-  return sorted.map((node, idx) => ({
-    id: String(node.id),
-    type: "agent",
-    position: { x: positions[idx].x - 22, y: positions[idx].y - 22 },
-    data: {
-      agentId: node.id,
-      label: node.name,
-      stance: node.stance ?? "neutral",
-      policySupport: node.policySupport ?? 0,
-      influenceScore: node.influenceScore ?? 0,
-    } satisfies AgentNodeData,
-  }));
+  return sorted.map((node, idx) => {
+    const n = node as SimulationGraphNodeWithProfile;
+    return {
+      id: String(node.id),
+      type: "agent",
+      position: { x: positions[idx].x, y: positions[idx].y },
+      data: {
+        agentId: node.id,
+        label: node.name,
+        stance: node.stance ?? "neutral",
+        policySupport: node.policySupport ?? 0,
+        influenceScore: node.influenceScore ?? 0,
+        age: typeof n.age === "number" ? n.age : undefined,
+        gender: typeof n.gender === "string" ? n.gender : undefined,
+        region: typeof n.region === "string" ? n.region : undefined,
+        occupation: typeof n.occupation === "string" ? n.occupation : undefined,
+      } satisfies AgentNodeData,
+    };
+  });
 }
 
 /* ─── Conversation helpers ─── */
@@ -615,18 +678,18 @@ function GraphToolbarControls({ onFitView }: { onFitView: () => void }) {
 /* ─── Inspector Panel ─── */
 
 const inspectorSectionTitleStyle: CSSProperties = {
-  fontSize: 10,
+  fontSize: 9,
   fontWeight: 600,
   color: "#64748b",
   textTransform: "uppercase",
-  letterSpacing: "0.08em",
-  marginBottom: 8,
+  letterSpacing: "0.06em",
+  marginBottom: 6,
 };
 
 const msgBodyStyleBase: CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   color: "#e2e8f0",
-  lineHeight: 1.55,
+  lineHeight: 1.5,
   whiteSpace: "pre-wrap",
   wordBreak: "break-word",
 };
@@ -677,20 +740,20 @@ function InspectorScrollableText({
 }) {
   const trimmed = (text ?? "").trim();
   return (
-    <div style={{ marginBottom: 16 }}>
+    <div style={{ marginBottom: 12 }}>
       <div style={inspectorSectionTitleStyle}>{title}</div>
       {!trimmed ? (
-        <div style={{ fontSize: 12, color: "#64748b" }}>{emptyLabel ?? "—"}</div>
+        <div style={{ fontSize: 11, color: "#64748b" }}>{emptyLabel ?? "—"}</div>
       ) : (
         <div
           style={{
             ...msgBodyStyleBase,
             maxHeight,
             overflowY: "auto",
-            padding: "10px 12px",
-            background: "rgba(30, 41, 59, 0.55)",
-            borderRadius: 10,
-            border: "1px solid rgba(51, 65, 85, 0.5)",
+            padding: "8px 10px",
+            background: "rgba(30, 41, 59, 0.45)",
+            borderRadius: 8,
+            border: "1px solid rgba(51, 65, 85, 0.38)",
           }}
         >
           {trimmed}
@@ -742,30 +805,13 @@ function InspectorPanel({
 
   return (
     <div className="graph-db-inspector">
-      <div
-        style={{
-          padding: "16px 20px",
-          borderBottom: "1px solid rgba(51, 65, 85, 0.4)",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div className="graph-db-inspector-header">
+        <div className="graph-db-inspector-header-main">
           <div
+            className="graph-db-inspector-avatar"
             style={{
-              width: 40,
-              height: 40,
-              borderRadius: "50%",
-              background: `linear-gradient(135deg, ${cfg.color}, ${cfg.color}cc)`,
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 14,
-              fontWeight: 700,
-              color: "#fff",
-              border: "2px solid rgba(255,255,255,0.15)",
-              boxShadow: `0 0 16px ${cfg.glow}`,
+              background: `linear-gradient(145deg, ${cfg.color}ee, ${cfg.color}99)`,
+              boxShadow: `0 0 14px ${cfg.glow}`,
             }}
           >
             {sel.name
@@ -775,63 +821,37 @@ function InspectorPanel({
               .toUpperCase()
               .slice(0, 2)}
           </div>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0" }}>{sel.name}</div>
-            <div style={{ fontSize: 11, color: "#64748b" }}>Agent #{sel.id}</div>
+          <div className="graph-db-inspector-title-block">
+            <div className="graph-db-inspector-name" title={sel.name}>
+              {sel.name}
+            </div>
+            <div className="graph-db-inspector-meta">Agent #{sel.id}</div>
           </div>
         </div>
-        <button
-          onClick={onClose}
-          style={{
-            background: "rgba(51, 65, 85, 0.4)",
-            border: "1px solid rgba(71, 85, 105, 0.5)",
-            borderRadius: 8,
-            color: "#94a3b8",
-            cursor: "pointer",
-            padding: 5,
-            display: "flex",
-          }}
-        >
-          <X size={14} />
+        <button type="button" className="graph-db-inspector-close" onClick={onClose} aria-label="Close inspector">
+          <X size={13} strokeWidth={2} />
         </button>
       </div>
 
-      <div style={{ padding: "16px 20px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+      <div className="graph-db-inspector-body">
+        <div className="graph-db-inspector-metrics">
           {[
             { label: "Stance", value: sel.stance, color: cfg.color, capitalize: true },
             { label: "Influence", value: formatScore(sel.influenceScore), mono: true },
-            { label: "Policy support", value: formatScore(sel.policySupport), mono: true },
+            { label: "Policy", fullLabel: "Policy support", value: formatScore(sel.policySupport), mono: true },
             { label: "Confidence", value: formatScore(sel.confidenceLevel), mono: true },
             { label: "Credibility", value: formatScore(sel.credibilityScore), mono: true },
             { label: "Activity", value: formatScore(sel.activityLevel), mono: true },
-            { label: "Trust (gov)", value: formatScore(bs.trustInGovernment), mono: true },
-            { label: "Econ outlook", value: formatScore(bs.economicOutlook), mono: true },
+            { label: "Trust", fullLabel: "Trust in government", value: formatScore(bs.trustInGovernment), mono: true },
+            { label: "Econ", fullLabel: "Economic outlook", value: formatScore(bs.economicOutlook), mono: true },
           ].map((item) => (
-            <div
-              key={item.label}
-              style={{
-                background: "rgba(30, 41, 59, 0.6)",
-                borderRadius: 10,
-                padding: "10px 12px",
-                border: "1px solid rgba(51, 65, 85, 0.5)",
-              }}
-            >
-              <div
-                style={{
-                  fontSize: 9,
-                  color: "#64748b",
-                  textTransform: "uppercase",
-                  letterSpacing: "0.08em",
-                  marginBottom: 4,
-                }}
-              >
+            <div key={item.label} className="graph-db-inspector-metric">
+              <div className="graph-db-inspector-metric-label" title={"fullLabel" in item ? item.fullLabel : item.label}>
                 {item.label}
               </div>
               <div
+                className="graph-db-inspector-metric-value"
                 style={{
-                  fontSize: 13,
-                  fontWeight: 600,
                   color: item.color ?? "#e2e8f0",
                   textTransform: item.capitalize ? "capitalize" : undefined,
                   fontFamily: item.mono ? "ui-monospace, monospace" : undefined,
@@ -843,107 +863,52 @@ function InspectorPanel({
           ))}
         </div>
 
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 12 }}>
           <div style={inspectorSectionTitleStyle}>Profile</div>
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 8,
-              fontSize: 12,
-              color: "#cbd5e1",
-            }}
-          >
-            <div
-              style={{
-                background: "rgba(30, 41, 59, 0.45)",
-                borderRadius: 8,
-                padding: "8px 10px",
-                border: "1px solid rgba(51, 65, 85, 0.45)",
-              }}
-            >
-              <span style={{ color: "#64748b", fontSize: 10, display: "block", marginBottom: 2 }}>
-                Age
-              </span>
+          <div className="graph-db-inspector-profile-grid">
+            <div className="graph-db-inspector-profile-cell">
+              <span className="graph-db-inspector-profile-k">Age</span>
               {sel.age}
             </div>
-            <div
-              style={{
-                background: "rgba(30, 41, 59, 0.45)",
-                borderRadius: 8,
-                padding: "8px 10px",
-                border: "1px solid rgba(51, 65, 85, 0.45)",
-              }}
-            >
-              <span style={{ color: "#64748b", fontSize: 10, display: "block", marginBottom: 2 }}>
-                Gender
-              </span>
+            <div className="graph-db-inspector-profile-cell">
+              <span className="graph-db-inspector-profile-k">Gender</span>
               <span style={{ textTransform: "capitalize" }}>{sel.gender}</span>
             </div>
-            <div
-              style={{
-                gridColumn: "1 / -1",
-                background: "rgba(30, 41, 59, 0.45)",
-                borderRadius: 8,
-                padding: "8px 10px",
-                border: "1px solid rgba(51, 65, 85, 0.45)",
-              }}
-            >
-              <span style={{ color: "#64748b", fontSize: 10, display: "block", marginBottom: 2 }}>
-                Region
-              </span>
-              {sel.region}
+            <div className="graph-db-inspector-profile-cell graph-db-inspector-profile-cell--wide">
+              <span className="graph-db-inspector-profile-k">Region</span>
+              <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>{sel.region}</span>
             </div>
-            <div
-              style={{
-                gridColumn: "1 / -1",
-                background: "rgba(30, 41, 59, 0.45)",
-                borderRadius: 8,
-                padding: "8px 10px",
-                border: "1px solid rgba(51, 65, 85, 0.45)",
-              }}
-            >
-              <span style={{ color: "#64748b", fontSize: 10, display: "block", marginBottom: 2 }}>
-                Occupation
-              </span>
-              {sel.occupation}
+            <div className="graph-db-inspector-profile-cell graph-db-inspector-profile-cell--wide">
+              <span className="graph-db-inspector-profile-k">Occupation</span>
+              <span style={{ whiteSpace: "normal", wordBreak: "break-word" }}>{sel.occupation}</span>
             </div>
             {sel.groupId != null && (
               <div
-                style={{
-                  gridColumn: "1 / -1",
-                  background: "rgba(30, 41, 59, 0.35)",
-                  borderRadius: 8,
-                  padding: "8px 10px",
-                  border: "1px solid rgba(99, 102, 241, 0.2)",
-                  fontFamily: "ui-monospace, monospace",
-                  fontSize: 11,
-                  color: "#a5b4fc",
-                }}
+                className="graph-db-inspector-profile-cell graph-db-inspector-profile-cell--wide graph-db-inspector-profile-cell--group"
               >
-                Agent pool group id: {sel.groupId}
+                Pool group · {sel.groupId}
               </div>
             )}
           </div>
         </div>
 
-        <InspectorScrollableText title="Persona" text={sel.persona} maxHeight={160} />
+        <InspectorScrollableText title="Persona" text={sel.persona} maxHeight={140} />
 
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: 12 }}>
           <div style={inspectorSectionTitleStyle}>Behavioral instructions (system prompt)</div>
           {!systemPromptText ? (
-            <div style={{ fontSize: 12, color: "#64748b" }}>No custom system prompt stored.</div>
+            <div style={{ fontSize: 11, color: "#64748b" }}>No custom system prompt stored.</div>
           ) : (
             <>
               <div
                 style={{
                   ...msgBodyStyleBase,
-                  maxHeight: systemPromptExpanded ? 320 : undefined,
+                  maxHeight: systemPromptExpanded ? 280 : undefined,
                   overflowY: systemPromptExpanded ? "auto" : undefined,
-                  padding: "10px 12px",
-                  background: "rgba(30, 41, 59, 0.55)",
-                  borderRadius: 10,
-                  border: "1px solid rgba(51, 65, 85, 0.5)",
+                  padding: "8px 10px",
+                  background: "rgba(30, 41, 59, 0.45)",
+                  borderRadius: 8,
+                  border: "1px solid rgba(51, 65, 85, 0.38)",
                 }}
               >
                 {systemPromptShown}
@@ -953,8 +918,8 @@ function InspectorPanel({
                   type="button"
                   onClick={() => setSystemPromptExpanded((v) => !v)}
                   style={{
-                    marginTop: 8,
-                    fontSize: 11,
+                    marginTop: 6,
+                    fontSize: 10,
                     fontWeight: 600,
                     color: "#818cf8",
                     background: "transparent",
@@ -974,35 +939,35 @@ function InspectorPanel({
           { title: "Outgoing", items: outgoing, isOutgoing: true },
           { title: "Incoming", items: incoming, isOutgoing: false },
         ].map(({ title, items, isOutgoing }) => (
-          <div key={title} style={{ marginBottom: 14 }}>
+          <div key={title} style={{ marginBottom: 10 }}>
             <div
               style={{
-                fontSize: 10,
+                fontSize: 9,
                 fontWeight: 600,
                 color: "#64748b",
                 textTransform: "uppercase",
-                letterSpacing: "0.08em",
-                marginBottom: 6,
+                letterSpacing: "0.06em",
+                marginBottom: 5,
                 display: "flex",
                 alignItems: "center",
-                gap: 6,
+                gap: 5,
               }}
             >
               <ArrowRight
-                size={12}
+                size={11}
                 style={isOutgoing ? undefined : { transform: "rotate(180deg)" }}
               />
               {title} ({items.length})
             </div>
             {items.length === 0 ? (
-              <div style={{ fontSize: 12, color: "#475569" }}>None</div>
+              <div style={{ fontSize: 11, color: "#475569" }}>None</div>
             ) : (
               <div
                 style={{
                   display: "flex",
                   flexDirection: "column",
                   gap: 3,
-                  maxHeight: 140,
+                  maxHeight: 120,
                   overflowY: "auto",
                 }}
               >
@@ -1018,11 +983,11 @@ function InspectorPanel({
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "space-between",
-                        padding: "6px 10px",
-                        background: "rgba(30, 41, 59, 0.5)",
-                        borderRadius: 8,
-                        border: "1px solid rgba(51, 65, 85, 0.4)",
-                        fontSize: 12,
+                        padding: "5px 8px",
+                        background: "rgba(30, 41, 59, 0.4)",
+                        borderRadius: 7,
+                        border: "1px solid rgba(51, 65, 85, 0.35)",
+                        fontSize: 11,
                       }}
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -1059,60 +1024,60 @@ function InspectorPanel({
 
         <div
           style={{
-            borderTop: "1px solid rgba(51, 65, 85, 0.4)",
-            paddingTop: 12,
-            marginTop: 4,
+            borderTop: "1px solid rgba(51, 65, 85, 0.35)",
+            paddingTop: 10,
+            marginTop: 2,
           }}
         >
           <div
             style={{
-              fontSize: 10,
+              fontSize: 9,
               fontWeight: 600,
               color: "#64748b",
               textTransform: "uppercase",
-              letterSpacing: "0.08em",
-              marginBottom: 8,
+              letterSpacing: "0.06em",
+              marginBottom: 6,
               display: "flex",
               alignItems: "center",
-              gap: 6,
+              gap: 5,
             }}
           >
-            <MessageCircle size={12} />
+            <MessageCircle size={11} />
             Conversation
           </div>
 
           {postThreads.length === 0 && repliesOnOthersPosts.length === 0 ? (
-            <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
+            <div style={{ fontSize: 11, color: "#475569", lineHeight: 1.45 }}>
               Nothing in graph data for this agent yet—often they chose <strong style={{ color: "#94a3b8" }}>ignore</strong>{" "}
               that round (no post/comment row). Try another agent, refresh the tab, or re-open Network after a round
               finishes. Data is from the API <span style={{ fontFamily: "ui-monospace, monospace" }}>/graph</span> (Postgres),
               not Neo4j.
             </div>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {postThreads.length > 0 && (
                 <div>
                   <div
                     style={{
-                      fontSize: 10,
+                      fontSize: 9,
                       fontWeight: 600,
                       color: "#818cf8",
                       textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      marginBottom: 8,
+                      letterSpacing: "0.05em",
+                      marginBottom: 6,
                     }}
                   >
                     Their posts & replies on them ({postThreads.length})
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {postThreads.map(({ post, replies }) => (
                       <div
                         key={post.id}
                         style={{
-                          padding: "10px 12px",
-                          background: "rgba(30, 41, 59, 0.55)",
-                          borderRadius: 10,
-                          border: "1px solid rgba(51, 65, 85, 0.45)",
+                          padding: "8px 10px",
+                          background: "rgba(30, 41, 59, 0.45)",
+                          borderRadius: 8,
+                          border: "1px solid rgba(51, 65, 85, 0.38)",
                         }}
                       >
                         <div
@@ -1202,25 +1167,25 @@ function InspectorPanel({
                 <div>
                   <div
                     style={{
-                      fontSize: 10,
+                      fontSize: 9,
                       fontWeight: 600,
                       color: "#818cf8",
                       textTransform: "uppercase",
-                      letterSpacing: "0.06em",
-                      marginBottom: 8,
+                      letterSpacing: "0.05em",
+                      marginBottom: 6,
                     }}
                   >
                     Their replies on others&apos; posts ({repliesOnOthersPosts.length})
                   </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     {repliesOnOthersPosts.map(({ comment, parentPost }) => (
                       <div
                         key={comment.id}
                         style={{
-                          padding: "10px 12px",
-                          background: "rgba(30, 41, 59, 0.55)",
-                          borderRadius: 10,
-                          border: "1px solid rgba(51, 65, 85, 0.45)",
+                          padding: "8px 10px",
+                          background: "rgba(30, 41, 59, 0.45)",
+                          borderRadius: 8,
+                          border: "1px solid rgba(51, 65, 85, 0.38)",
                         }}
                       >
                         <div
