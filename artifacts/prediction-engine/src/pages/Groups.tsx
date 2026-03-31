@@ -2,15 +2,27 @@ import { useState } from "react";
 import {
   createGroup,
   useCreateGroupWithAgents,
+  useDeleteGroup,
   useListGroups,
   useSuggestGroupCohortFields,
   type Group,
   type SuggestGroupCohortFieldsResponse,
 } from "@workspace/api-client-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Network, Plus, Sparkles, X } from "lucide-react";
+import { Network, Plus, Sparkles, Trash2, X } from "lucide-react";
 import { motion } from "framer-motion";
-import { normalizeApiArray } from "@/lib/utils";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { buttonVariants } from "@/components/ui/button";
+import { normalizeApiArray, cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 
 export default function Groups() {
@@ -19,6 +31,9 @@ export default function Groups() {
   const groupList = normalizeApiArray<Group>(groups);
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [groupPendingDelete, setGroupPendingDelete] = useState<Group | null>(
+    null,
+  );
   const [emptyGroupOnly, setEmptyGroupOnly] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -66,6 +81,22 @@ export default function Groups() {
           variant: "destructive",
           title: "Could not create cohort",
           description: message,
+        });
+      },
+    },
+  });
+
+  const deleteGroup = useDeleteGroup({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["/api/groups"] });
+        toast({ title: "Group deleted" });
+      },
+      onError: () => {
+        toast({
+          variant: "destructive",
+          title: "Could not delete group",
+          description: "Try again or check the server.",
         });
       },
     },
@@ -188,7 +219,19 @@ export default function Groups() {
               key={group.id}
               className="bg-card border border-border p-6 rounded-2xl shadow-sm hover:border-accent/50 transition-all"
             >
-              <h3 className="text-xl font-bold mb-2 text-foreground">{group.name}</h3>
+              <div className="flex justify-between items-start gap-3 mb-2">
+                <h3 className="text-xl font-bold text-foreground pr-1">{group.name}</h3>
+                <button
+                  type="button"
+                  onClick={() => setGroupPendingDelete(group)}
+                  disabled={deleteGroup.isPending}
+                  className="shrink-0 inline-flex items-center gap-1.5 text-sm font-medium text-destructive hover:bg-destructive/10 px-2 py-1 rounded-lg transition-colors disabled:opacity-50"
+                  aria-label={`Delete group ${group.name}`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+              </div>
               <p className="text-sm text-muted-foreground line-clamp-4">{group.description}</p>
               {group.poolAgentCount != null && (
                 <p className="mt-3 text-xs font-mono text-accent">
@@ -199,6 +242,38 @@ export default function Groups() {
           ))
         )}
       </div>
+
+      <AlertDialog
+        open={!!groupPendingDelete}
+        onOpenChange={(open) => {
+          if (!open) setGroupPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete group?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes &quot;{groupPendingDelete?.name}&quot; and all pool agents in that
+              group. Agents already copied into simulations stay in those runs, but lose the
+              group link. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={cn(buttonVariants({ variant: "destructive" }))}
+              disabled={deleteGroup.isPending}
+              onClick={() => {
+                if (groupPendingDelete) {
+                  deleteGroup.mutate({ id: groupPendingDelete.id });
+                }
+              }}
+            >
+              {deleteGroup.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {isDialogOpen && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">

@@ -3,10 +3,17 @@ import { useRoute } from "wouter";
 import {
   useGetSimulation,
   useGetSimulationPosts,
+  useListPolicies,
+  useListEvents,
+  getListEventsQueryKey,
+  getGetSimulationQueryKey,
+  patchSimulationConfig,
   ApiError,
   customFetch,
   type Post,
   type GraphComment,
+  type Policy,
+  type Event,
 } from "@workspace/api-client-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -20,14 +27,17 @@ import {
   CornerDownRight,
   BarChart2,
   Info,
+  Settings,
   Sparkles,
   Heart,
   Repeat2,
   Share2,
   MessageCircle,
+  Zap,
 } from "lucide-react";
 import { Link } from "wouter";
 import { cn, formatScore, normalizeApiArray } from "@/lib/utils";
+import { toast } from "@/hooks/use-toast";
 
 function initialsFromName(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
@@ -44,6 +54,17 @@ function shortFeedTime(iso: string | undefined): string {
     return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   } catch {
     return "";
+  }
+}
+
+function formatConfigDate(iso: string | undefined): string {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  } catch {
+    return iso;
   }
 }
 
@@ -75,6 +96,18 @@ function sentimentTrendLayman(t: "up" | "down" | "flat"): string {
   if (t === "up") return "Public sentiment has warmed.";
   if (t === "down") return "Public sentiment has cooled.";
   return "Public sentiment has held fairly steady.";
+}
+
+const EMPTY_EVENT_IDS: number[] = [];
+
+function normalizeConfigEventIds(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  const out: number[] = [];
+  for (const x of raw) {
+    const n = typeof x === "number" ? x : parseInt(String(x), 10);
+    if (Number.isFinite(n) && n > 0) out.push(n);
+  }
+  return [...new Set(out)];
 }
 
 function avatarGradientClass(agentId: number): string {
@@ -110,6 +143,7 @@ export default function SimulationDetail() {
 
   const queryClient = useQueryClient();
   const { data: sim, isLoading } = useGetSimulation(id);
+  const { data: policiesData } = useListPolicies();
   const { data: postsData } = useGetSimulationPosts(id, { limit: 100 });
   const posts = normalizeApiArray<Post>(postsData);
 
@@ -141,6 +175,68 @@ export default function SimulationDetail() {
     }
     return m;
   }, [commentsRaw]);
+
+  const { data: eventsData, isLoading: eventsLoading } = useListEvents(undefined, {
+    query: {
+      queryKey: getListEventsQueryKey(),
+      enabled: Number.isFinite(id) && id > 0,
+    },
+  });
+
+  const globalCatalogEvents = useMemo(() => {
+    const list = normalizeApiArray<Event>(eventsData);
+    return list
+      .filter((e) => e.simulationId == null)
+      .sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  }, [eventsData]);
+
+  const savedEventIds = useMemo(() => {
+    if (!sim) return EMPTY_EVENT_IDS;
+    return normalizeConfigEventIds(sim.config.eventIds);
+  }, [sim]);
+
+  const [draftEventIds, setDraftEventIds] = useState<number[]>([]);
+  const [eventPicker, setEventPicker] = useState("");
+  const [savingEventSelection, setSavingEventSelection] = useState(false);
+
+  useEffect(() => {
+    setDraftEventIds(savedEventIds);
+  }, [savedEventIds]);
+
+  const eventSelectionDirty =
+    draftEventIds.length !== savedEventIds.length ||
+    draftEventIds.some((x, i) => x !== savedEventIds[i]);
+
+  const draftResolvedEvents = useMemo(() => {
+    const m = new Map(globalCatalogEvents.map((e) => [e.id, e]));
+    return draftEventIds.map((eid) => m.get(eid)).filter(Boolean) as Event[];
+  }, [draftEventIds, globalCatalogEvents]);
+
+  const handleAddPickedEvent = useCallback(() => {
+    const eid = parseInt(eventPicker, 10);
+    if (!Number.isFinite(eid) || eid <= 0) return;
+    if (!globalCatalogEvents.some((e) => e.id === eid)) return;
+    setDraftEventIds((prev) => (prev.includes(eid) ? prev : [...prev, eid]));
+    setEventPicker("");
+  }, [eventPicker, globalCatalogEvents]);
+
+  const handleSaveEventSelection = useCallback(async () => {
+    if (!Number.isFinite(id) || id <= 0) return;
+    setSavingEventSelection(true);
+    try {
+      await patchSimulationConfig(id, { eventIds: draftEventIds });
+      await queryClient.invalidateQueries({ queryKey: getGetSimulationQueryKey(id) });
+      toast({ title: "Selection saved", description: "These catalog events will be used on the next round." });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Could not save selection",
+        description: err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Try again.",
+      });
+    } finally {
+      setSavingEventSelection(false);
+    }
+  }, [id, draftEventIds, queryClient]);
 
   const [isRunning, setIsRunning] = useState(false);
   const [streamPhase, setStreamPhase] = useState<StreamPhase>("idle");
@@ -354,6 +450,12 @@ export default function SimulationDetail() {
 
   if (isLoading || !sim) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading simulation core...</div>;
 
+  const policyList = normalizeApiArray<Policy>(policiesData);
+  const policyId = sim.config.policyId;
+  const linkedPolicy =
+    policyId != null && policyId > 0 ? policyList.find((p) => p.id === policyId) : undefined;
+  const groupIds = sim.config.groupIds?.filter((g) => g > 0) ?? [];
+
   const progressPct =
     streamProgress && streamProgress.total > 0
       ? Math.round((streamProgress.current / streamProgress.total) * 100)
@@ -466,10 +568,14 @@ export default function SimulationDetail() {
       )}
 
       <Tabs defaultValue="overview" className="space-y-6">
-        <TabsList className="grid w-full max-w-3xl grid-cols-3 h-auto p-1 gap-1">
+        <TabsList className="grid w-full max-w-4xl grid-cols-2 sm:grid-cols-4 h-auto p-1 gap-1">
           <TabsTrigger value="overview" className="gap-2 py-2 text-xs sm:text-sm">
             <Activity className="w-4 h-4 shrink-0" />
             <span className="truncate">Overview</span>
+          </TabsTrigger>
+          <TabsTrigger value="config" className="gap-2 py-2 text-xs sm:text-sm">
+            <Settings className="w-4 h-4 shrink-0" />
+            <span className="truncate">Config</span>
           </TabsTrigger>
           <TabsTrigger value="beliefs" className="gap-2 py-2 text-xs sm:text-sm">
             <BarChart2 className="w-4 h-4 shrink-0" />
@@ -481,6 +587,229 @@ export default function SimulationDetail() {
             <span className="sm:hidden">Graph</span>
           </TabsTrigger>
         </TabsList>
+
+        <TabsContent value="config" className="mt-0 space-y-6">
+          <div className="bg-card border border-border rounded-2xl shadow-lg overflow-hidden">
+            <div className="flex items-center gap-2 border-b border-border/60 bg-secondary/20 px-5 py-3">
+              <Settings className="w-5 h-5 text-primary shrink-0" />
+              <div>
+                <h2 className="text-sm font-semibold tracking-tight text-foreground">Simulation configuration</h2>
+                <p className="text-[11px] text-muted-foreground">All settings stored for this run (read-only)</p>
+              </div>
+            </div>
+            <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-x-10 gap-y-4 text-sm">
+              <dl className="space-y-3 md:col-span-1">
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Simulation ID</dt>
+                  <dd className="font-mono text-foreground">{sim.id}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Created</dt>
+                  <dd className="text-foreground">{formatConfigDate(sim.createdAt)}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Status</dt>
+                  <dd className="text-foreground capitalize">{sim.status}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Rounds</dt>
+                  <dd className="text-foreground">
+                    <span className="font-mono">{sim.currentRound}</span>
+                    <span className="text-muted-foreground"> current · </span>
+                    <span className="font-mono">{sim.config.numRounds}</span>
+                    <span className="text-muted-foreground"> planned</span>
+                  </dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Learning rate (α)</dt>
+                  <dd className="font-mono text-foreground">{sim.config.learningRate}</dd>
+                </div>
+              </dl>
+              <dl className="space-y-3 md:col-span-1">
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Agent count (config)</dt>
+                  <dd className="font-mono text-foreground">{sim.config.agentCount}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Agents in simulation</dt>
+                  <dd className="font-mono text-foreground">{sim.totalAgents}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Posts (total)</dt>
+                  <dd className="font-mono text-foreground">{sim.totalPosts}</dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Target policy</dt>
+                  <dd className="text-foreground">
+                    {policyId != null && policyId > 0 ? (
+                      <>
+                        <Link href="/policies" className="text-primary font-medium hover:underline">
+                          {linkedPolicy?.title ?? `Policy #${policyId}`}
+                        </Link>
+                        <span className="text-muted-foreground font-mono text-xs ml-1">(id {policyId})</span>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground">None (baseline)</span>
+                    )}
+                  </dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Cohort groups</dt>
+                  <dd className="text-foreground">
+                    {groupIds.length > 0 ? (
+                      <span className="flex flex-wrap gap-1.5">
+                        {groupIds.map((gid) => (
+                          <Link
+                            key={gid}
+                            href="/groups"
+                            className="inline-flex items-center rounded-md border border-border bg-secondary/40 px-2 py-0.5 font-mono text-xs text-primary hover:bg-secondary/70"
+                          >
+                            Group #{gid}
+                          </Link>
+                        ))}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">None — agents from template or pool clone only in config</span>
+                    )}
+                  </dd>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <dt className="text-xs font-medium uppercase tracking-wider text-muted-foreground">External events (in rounds)</dt>
+                  <dd className="text-foreground">
+                    {eventsLoading ? (
+                      <span className="text-muted-foreground animate-pulse">Loading…</span>
+                    ) : savedEventIds.length === 0 ? (
+                      <span className="text-muted-foreground">
+                        None selected — pick global catalog events below (create them on the{" "}
+                        <Link href="/events" className="text-primary font-medium hover:underline">
+                          Events
+                        </Link>{" "}
+                        page).
+                      </span>
+                    ) : (
+                      <span>
+                        <span className="font-medium text-emerald-600 dark:text-emerald-400">Yes</span>
+                        <span className="text-muted-foreground">
+                          {" "}
+                          — {savedEventIds.length} catalog event{savedEventIds.length === 1 ? "" : "s"} included in agent and
+                          orchestrator prompts when you run a round.
+                          {eventSelectionDirty ? (
+                            <span className="text-amber-600 dark:text-amber-400"> Unsaved changes.</span>
+                          ) : null}
+                        </span>
+                      </span>
+                    )}
+                  </dd>
+                </div>
+              </dl>
+              <div className="md:col-span-2 flex flex-col gap-3 pt-3 border-t border-border/50">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Zap className="h-4 w-4 text-amber-500 shrink-0" aria-hidden />
+                  <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Catalog events for this run
+                  </div>
+                  <Link href="/events" className="ml-auto text-xs font-medium text-primary hover:underline">
+                    Manage catalog
+                  </Link>
+                </div>
+                <p className="text-[11px] text-muted-foreground m-0 leading-relaxed">
+                  Choose from the shared global event catalog (not tied to any simulation). Your selection is stored on this run’s
+                  config and passed into each round’s prompts in the order shown.
+                </p>
+
+                <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] dark:bg-amber-500/10 p-3 sm:p-4 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:flex-wrap gap-2 sm:items-end">
+                    <div className="flex-1 min-w-[12rem] space-y-1">
+                      <label htmlFor="sim-event-picker" className="text-[11px] font-medium text-muted-foreground">
+                        Add from catalog
+                      </label>
+                      <select
+                        id="sim-event-picker"
+                        value={eventPicker}
+                        onChange={(ev) => setEventPicker(ev.target.value)}
+                        disabled={savingEventSelection || globalCatalogEvents.length === 0}
+                        className="w-full bg-background/80 border border-border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+                      >
+                        <option value="">Select an event…</option>
+                        {globalCatalogEvents
+                          .filter((e) => !draftEventIds.includes(e.id))
+                          .map((e) => (
+                            <option key={e.id} value={e.id}>
+                              #{e.id} · {e.type}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      disabled={!eventPicker || savingEventSelection}
+                      onClick={handleAddPickedEvent}
+                      className="w-full sm:w-auto"
+                    >
+                      Add to selection
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={!eventSelectionDirty || savingEventSelection}
+                      onClick={() => void handleSaveEventSelection()}
+                      className="w-full sm:w-auto bg-amber-600 hover:bg-amber-500 text-amber-50"
+                    >
+                      {savingEventSelection ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 mr-2 animate-spin" />
+                          Saving…
+                        </>
+                      ) : (
+                        "Save selection"
+                      )}
+                    </Button>
+                  </div>
+                  {globalCatalogEvents.length === 0 && !eventsLoading ? (
+                    <p className="text-[11px] text-muted-foreground m-0">
+                      No global catalog events yet. Create them on the Events page — they are not scoped to a simulation.
+                    </p>
+                  ) : null}
+                  {draftResolvedEvents.length > 0 ? (
+                    <ul className="m-0 list-none p-0 space-y-2">
+                      {draftResolvedEvents.map((ev) => (
+                        <li
+                          key={ev.id}
+                          className="flex gap-2 rounded-lg border border-border/80 bg-background/60 px-3 py-2 text-xs sm:text-sm"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2 gap-y-1">
+                              <span className="font-mono text-[10px] text-muted-foreground">#{ev.id}</span>
+                              <span className="font-medium text-foreground">{ev.type}</span>
+                              <span className="font-mono text-[11px] text-muted-foreground tabular-nums">
+                                impact {formatScore(ev.impactScore)}
+                              </span>
+                            </div>
+                            <p className="mt-1 m-0 text-muted-foreground leading-snug line-clamp-3">{ev.description}</p>
+                          </div>
+                          <button
+                            type="button"
+                            className="shrink-0 self-start rounded-md border border-border px-2 py-1 text-[11px] font-medium text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                            onClick={() => setDraftEventIds((prev) => prev.filter((x) => x !== ev.id))}
+                            disabled={savingEventSelection}
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-[11px] text-muted-foreground m-0">No events in this run’s selection yet.</p>
+                  )}
+                </div>
+              </div>
+              <div className="md:col-span-2 flex flex-col gap-1.5 pt-3 border-t border-border/50">
+                <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Description</div>
+                <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap m-0">{sim.description || "—"}</p>
+              </div>
+            </div>
+          </div>
+        </TabsContent>
 
         <TabsContent value="overview" className="mt-0 space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -816,7 +1145,7 @@ export default function SimulationDetail() {
           </section>
         </TabsContent>
 
-        <TabsContent value="network" className="mt-0" forceMount>
+        <TabsContent value="network" className="mt-0">
           <SimulationNetworkPanel
             simulationId={id}
             streamHighlightAgentId={streamGraphHighlightAgentId}

@@ -1,7 +1,13 @@
-import { useState } from "react";
-import { useListAgents, useCreateAgent, type Agent } from "@workspace/api-client-react";
+import { useMemo, useState } from "react";
+import {
+  useListAgents,
+  useCreateAgent,
+  useListGroups,
+  type Agent,
+  type Group,
+} from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Users, Plus, BrainCircuit, Activity, ChevronRight, Check } from "lucide-react";
+import { Users, Plus, BrainCircuit, ChevronRight, Check } from "lucide-react";
 import { Link } from "wouter";
 import { formatScore, normalizeApiArray } from "@/lib/utils";
 import { motion } from "framer-motion";
@@ -9,9 +15,72 @@ import { motion } from "framer-motion";
 export default function Agents() {
   const queryClient = useQueryClient();
   const { data: agents, isLoading } = useListAgents();
+  const { data: groupsData } = useListGroups();
   const createAgent = useCreateAgent();
   const agentList = normalizeApiArray<Agent>(agents);
+  const groupsList = normalizeApiArray<Group>(groupsData);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+
+  const agentSections = useMemo(() => {
+    const byGroup = new Map<number, Agent[]>();
+    const unassigned: Agent[] = [];
+    for (const a of agentList) {
+      const gid = a.groupId;
+      if (gid == null) {
+        unassigned.push(a);
+        continue;
+      }
+      const list = byGroup.get(gid) ?? [];
+      list.push(a);
+      byGroup.set(gid, list);
+    }
+
+    const knownIds = new Set(groupsList.map((g) => g.id));
+    type Section = {
+      key: string;
+      title: string;
+      subtitle?: string;
+      agents: Agent[];
+    };
+    const sections: Section[] = [];
+
+    for (const g of [...groupsList].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    )) {
+      const list = byGroup.get(g.id);
+      if (list?.length) {
+        sections.push({
+          key: `group-${g.id}`,
+          title: g.name,
+          subtitle: g.description?.trim() || undefined,
+          agents: list,
+        });
+      }
+    }
+
+    for (const [gid, list] of byGroup) {
+      if (!knownIds.has(gid) && list.length) {
+        sections.push({
+          key: `group-orphan-${gid}`,
+          title: `Group #${gid}`,
+          subtitle: "Cohort was removed; agents still carry this group id.",
+          agents: list,
+        });
+      }
+    }
+
+    if (unassigned.length) {
+      sections.push({
+        key: "no-group",
+        title: "No group",
+        subtitle:
+          "Agents not assigned to a cohort (including simulation-only personas with no group link).",
+        agents: unassigned,
+      });
+    }
+
+    return sections;
+  }, [agentList, groupsList]);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -71,66 +140,33 @@ export default function Agents() {
             <div key={i} className="h-64 bg-card/50 border border-border/50 rounded-2xl animate-pulse" />
           ))}
         </div>
+      ) : agentSections.length === 0 ? (
+        <div className="rounded-2xl border border-dashed border-border bg-card/30 py-16 text-center text-muted-foreground text-sm">
+          No agents yet. Generate one or create a cohort under Groups.
+        </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {agentList.map((agent, i) => (
-            <motion.div 
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.05 }}
-              key={agent.id}
-            >
-              <Link href={`/agents/${agent.id}`} className="block h-full">
-                <div className="bg-card border border-border hover:border-primary/50 rounded-2xl p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:shadow-primary/5 h-full flex flex-col group">
-                  
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center border border-border group-hover:border-primary/30 transition-colors">
-                      <BrainCircuit className="w-6 h-6 text-muted-foreground group-hover:text-primary transition-colors" />
-                    </div>
-                    <div className="text-right">
-                      <div className="text-xs text-muted-foreground uppercase font-semibold tracking-wider">Influence</div>
-                      <div className="font-mono text-lg font-bold text-accent">{formatScore(agent.influenceScore)}</div>
-                    </div>
-                  </div>
-
-                  <h3 className="text-lg font-bold text-foreground line-clamp-1">{agent.name}</h3>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground mb-4">
-                    <span>{agent.age}yo</span> • 
-                    <span>{agent.occupation}</span> • 
-                    <span>{agent.region}</span>
-                  </div>
-
-                  <div className="mt-auto space-y-4">
-                    <div>
-                      <div className="flex justify-between text-xs mb-1.5">
-                        <span className="text-muted-foreground">Policy Support</span>
-                        <span className={`font-mono font-medium ${agent.beliefState.policySupport > 0 ? 'text-emerald-400' : agent.beliefState.policySupport < 0 ? 'text-destructive' : 'text-muted-foreground'}`}>
-                          {formatScore(agent.beliefState.policySupport)}
-                        </span>
-                      </div>
-                      <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden flex">
-                        {/* Render support bar (-1 to 1) */}
-                        <div className="w-1/2 flex justify-end">
-                          {agent.beliefState.policySupport < 0 && (
-                            <div className="h-full bg-destructive" style={{ width: `${Math.abs(agent.beliefState.policySupport) * 100}%` }} />
-                          )}
-                        </div>
-                        <div className="w-1/2 flex justify-start">
-                          {agent.beliefState.policySupport > 0 && (
-                            <div className="h-full bg-emerald-500" style={{ width: `${agent.beliefState.policySupport * 100}%` }} />
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="pt-4 border-t border-border/50 flex justify-between items-center group-hover:text-primary transition-colors">
-                      <span className="text-sm font-medium">View Persona</span>
-                      <ChevronRight className="w-4 h-4" />
-                    </div>
-                  </div>
+        <div className="space-y-10">
+          {agentSections.map((section) => (
+            <section key={section.key} className="space-y-4">
+              <div className="border-b border-border pb-3">
+                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                  <h2 className="text-lg font-semibold text-foreground">{section.title}</h2>
+                  <span className="text-xs font-mono text-muted-foreground">
+                    {section.agents.length} agent{section.agents.length === 1 ? "" : "s"}
+                  </span>
                 </div>
-              </Link>
-            </motion.div>
+                {section.subtitle ? (
+                  <p className="text-sm text-muted-foreground mt-1 line-clamp-2 max-w-3xl">
+                    {section.subtitle}
+                  </p>
+                ) : null}
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                {section.agents.map((agent, i) => (
+                  <AgentPersonaCard key={agent.id} agent={agent} index={i} />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}
@@ -210,5 +246,86 @@ export default function Agents() {
         </div>
       )}
     </div>
+  );
+}
+
+function AgentPersonaCard({ agent, index }: { agent: Agent; index: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: index * 0.05 }}
+    >
+      <Link href={`/agents/${agent.id}`} className="block h-full">
+        <div className="bg-card border border-border hover:border-primary/50 rounded-2xl p-5 shadow-lg transition-all duration-300 hover:shadow-xl hover:shadow-primary/5 h-full flex flex-col group">
+          <div className="flex justify-between items-start mb-4">
+            <div className="w-12 h-12 rounded-full bg-secondary flex items-center justify-center border border-border group-hover:border-primary/30 transition-colors">
+              <BrainCircuit className="w-6 h-6 text-muted-foreground group-hover:text-primary transition-colors" />
+            </div>
+            <div className="text-right">
+              <div className="text-xs text-muted-foreground uppercase font-semibold tracking-wider">
+                Influence
+              </div>
+              <div className="font-mono text-lg font-bold text-accent">
+                {formatScore(agent.influenceScore)}
+              </div>
+            </div>
+          </div>
+
+          <h3 className="text-lg font-bold text-foreground line-clamp-1">{agent.name}</h3>
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground mb-4">
+            <span>{agent.age}yo</span>
+            <span aria-hidden>•</span>
+            <span>{agent.occupation}</span>
+            <span aria-hidden>•</span>
+            <span>{agent.region}</span>
+          </div>
+
+          <div className="mt-auto space-y-4">
+            <div>
+              <div className="flex justify-between text-xs mb-1.5">
+                <span className="text-muted-foreground">Policy Support</span>
+                <span
+                  className={`font-mono font-medium ${
+                    agent.beliefState.policySupport > 0
+                      ? "text-emerald-400"
+                      : agent.beliefState.policySupport < 0
+                        ? "text-destructive"
+                        : "text-muted-foreground"
+                  }`}
+                >
+                  {formatScore(agent.beliefState.policySupport)}
+                </span>
+              </div>
+              <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden flex">
+                <div className="w-1/2 flex justify-end">
+                  {agent.beliefState.policySupport < 0 && (
+                    <div
+                      className="h-full bg-destructive"
+                      style={{
+                        width: `${Math.abs(agent.beliefState.policySupport) * 100}%`,
+                      }}
+                    />
+                  )}
+                </div>
+                <div className="w-1/2 flex justify-start">
+                  {agent.beliefState.policySupport > 0 && (
+                    <div
+                      className="h-full bg-emerald-500"
+                      style={{ width: `${agent.beliefState.policySupport * 100}%` }}
+                    />
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-4 border-t border-border/50 flex justify-between items-center group-hover:text-primary transition-colors">
+              <span className="text-sm font-medium">View Persona</span>
+              <ChevronRight className="w-4 h-4" />
+            </div>
+          </div>
+        </div>
+      </Link>
+    </motion.div>
   );
 }

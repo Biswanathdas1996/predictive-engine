@@ -21,6 +21,8 @@ import type {
   AgentNeighborhood,
   CreateAgentBody,
   CreateEventBody,
+  SuggestEventFromWebBody,
+  SuggestEventFromWebResult,
   CreateGroupBody,
   CreateGroupWithAgentsBody,
   CreateGroupWithAgentsResponse,
@@ -40,6 +42,7 @@ import type {
   MonteCarloConfig,
   MonteCarloResult,
   MonteCarloRun,
+  PatchSimulationConfigBody,
   Policy,
   Post,
   PredictionReport,
@@ -913,6 +916,23 @@ export const getSimulation = async (
   });
 };
 
+export const getPatchSimulationConfigUrl = (id: number) => {
+  return `/api/simulations/${id}/config`;
+};
+
+export const patchSimulationConfig = async (
+  id: number,
+  patchSimulationConfigBody: PatchSimulationConfigBody,
+  options?: RequestInit,
+): Promise<Simulation> => {
+  return customFetch<Simulation>(getPatchSimulationConfigUrl(id), {
+    ...options,
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(patchSimulationConfigBody),
+  });
+};
+
 export const getGetSimulationQueryKey = (id: number) => {
   return [`/api/simulations/${id}`] as const;
 };
@@ -1770,6 +1790,90 @@ export const useCreateGroup = <
 };
 
 /**
+ * @summary Delete a group
+ */
+export const getDeleteGroupUrl = (id: number) => {
+  return `/api/groups/${id}`;
+};
+
+export const deleteGroup = async (
+  id: number,
+  options?: RequestInit,
+): Promise<void> => {
+  return customFetch<void>(getDeleteGroupUrl(id), {
+    ...options,
+    method: "DELETE",
+  });
+};
+
+export const getDeleteGroupMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteGroup>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof deleteGroup>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  const mutationKey = ["deleteGroup"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof deleteGroup>>,
+    { id: number }
+  > = (props) => {
+    const { id } = props ?? {};
+
+    return deleteGroup(id, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteGroupMutationResult = NonNullable<
+  Awaited<ReturnType<typeof deleteGroup>>
+>;
+
+export type DeleteGroupMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Delete a group
+ */
+export const useDeleteGroup = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof deleteGroup>>,
+    TError,
+    { id: number },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof deleteGroup>>,
+  TError,
+  { id: number },
+  TContext
+> => {
+  return useMutation(getDeleteGroupMutationOptions(options));
+};
+
+/**
  * @summary Suggest cohort form fields via GenAI
  */
 export const getSuggestGroupCohortFieldsUrl = () => {
@@ -2483,4 +2587,90 @@ export const useCreateEvent = <
   TContext
 > => {
   return useMutation(getCreateEventMutationOptions(options));
+};
+
+/**
+ * @summary Draft event from live web search and PwC GenAI
+ */
+export const getSuggestEventFromWebUrl = () => {
+  return `/api/events/suggest-from-web`;
+};
+
+export const suggestEventFromWeb = async (
+  suggestEventFromWebBody: SuggestEventFromWebBody,
+  options?: RequestInit,
+): Promise<SuggestEventFromWebResult> => {
+  return customFetch<SuggestEventFromWebResult>(getSuggestEventFromWebUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(suggestEventFromWebBody),
+  });
+};
+
+export const getSuggestEventFromWebMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof suggestEventFromWeb>>,
+    TError,
+    { data: BodyType<SuggestEventFromWebBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof suggestEventFromWeb>>,
+  TError,
+  { data: BodyType<SuggestEventFromWebBody> },
+  TContext
+> => {
+  const mutationKey = ["suggestEventFromWeb"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof suggestEventFromWeb>>,
+    { data: BodyType<SuggestEventFromWebBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return suggestEventFromWeb(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SuggestEventFromWebMutationResult = NonNullable<
+  Awaited<ReturnType<typeof suggestEventFromWeb>>
+>;
+export type SuggestEventFromWebMutationBody = BodyType<SuggestEventFromWebBody>;
+export type SuggestEventFromWebMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Draft event from live web search and PwC GenAI
+ */
+export const useSuggestEventFromWeb = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof suggestEventFromWeb>>,
+    TError,
+    { data: BodyType<SuggestEventFromWebBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof suggestEventFromWeb>>,
+  TError,
+  { data: BodyType<SuggestEventFromWebBody> },
+  TContext
+> => {
+  return useMutation(getSuggestEventFromWebMutationOptions(options));
 };

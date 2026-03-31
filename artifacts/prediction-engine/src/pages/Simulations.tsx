@@ -3,22 +3,49 @@ import {
   useListSimulations,
   useListPolicies,
   useListGroups,
+  useDeleteSimulation,
   type Group,
   type Policy,
   type Simulation,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, Plus, Play, Info, Radio } from "lucide-react";
+import { Activity, Plus, Play, Info, Radio, Trash2 } from "lucide-react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
-import { normalizeApiArray } from "@/lib/utils";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { buttonVariants } from "@/components/ui/button";
+import { normalizeApiArray, cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { consumeSSEStream, type SSEEvent } from "@/lib/sse";
 
 export default function Simulations() {
   const queryClient = useQueryClient();
   const { data: simulations, isLoading } = useListSimulations();
+  const deleteSimulation = useDeleteSimulation({
+    mutation: {
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: ["/api/simulations"] });
+        toast({ title: "Simulation deleted" });
+      },
+      onError: () => {
+        toast({
+          variant: "destructive",
+          title: "Could not delete simulation",
+          description: "Try again or check the server.",
+        });
+      },
+    },
+  });
   const { data: policies } = useListPolicies();
   const { data: groupsData } = useListGroups();
 
@@ -50,6 +77,7 @@ export default function Simulations() {
   const [createProgress, setCreateProgress] = useState<{ current: number; total: number } | null>(null);
   const [createPhase, setCreatePhase] = useState<string>("");
   const abortRef = useRef<AbortController | null>(null);
+  const [simPendingDelete, setSimPendingDelete] = useState<Simulation | null>(null);
 
   const handleSubmit = useCallback((e: React.FormEvent) => {
     e.preventDefault();
@@ -232,12 +260,23 @@ export default function Simulations() {
                       {format(new Date(sim.createdAt), 'MMM d, yyyy')}
                     </td>
                     <td className="px-6 py-4 text-right">
-                      <Link
-                        href={`/simulations/${sim.id}`}
-                        className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary-foreground hover:bg-primary px-3 py-1.5 rounded-lg transition-colors"
-                      >
-                        Details <ChevronRight className="w-4 h-4" />
-                      </Link>
+                      <div className="inline-flex flex-wrap items-center justify-end gap-2">
+                        <Link
+                          href={`/simulations/${sim.id}`}
+                          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary-foreground hover:bg-primary px-3 py-1.5 rounded-lg transition-colors"
+                        >
+                          Details <ChevronRight className="w-4 h-4" />
+                        </Link>
+                        <button
+                          type="button"
+                          onClick={() => setSimPendingDelete(sim)}
+                          disabled={deleteSimulation.isPending}
+                          className="inline-flex items-center gap-1.5 text-sm font-medium text-destructive hover:bg-destructive/10 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -246,6 +285,37 @@ export default function Simulations() {
           </table>
         </div>
       </div>
+
+      <AlertDialog
+        open={!!simPendingDelete}
+        onOpenChange={(open) => {
+          if (!open) setSimPendingDelete(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete simulation?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently removes &quot;{simPendingDelete?.name}&quot; and all related
+              agents, posts, and runs. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={cn(buttonVariants({ variant: "destructive" }))}
+              disabled={deleteSimulation.isPending}
+              onClick={() => {
+                if (simPendingDelete) {
+                  deleteSimulation.mutate({ id: simPendingDelete.id });
+                }
+              }}
+            >
+              {deleteSimulation.isPending ? "Deleting…" : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {isDialogOpen && (
         <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">

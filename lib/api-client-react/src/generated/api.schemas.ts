@@ -129,6 +129,12 @@ export interface SimulationConfig {
    * @nullable
    */
   groupIds?: number[] | null;
+  /** Global catalog event IDs included in each round's LLM context. */
+  eventIds?: number[];
+}
+
+export interface PatchSimulationConfigBody {
+  eventIds: number[];
 }
 
 export interface Simulation {
@@ -392,6 +398,20 @@ export interface CreateEventBody {
   impactScore: number;
   /** @nullable */
   simulationId?: number | null;
+}
+
+export interface SuggestEventFromWebBody {
+  query: string;
+}
+
+export interface SuggestEventFromWebResult {
+  type: string;
+  description: string;
+  impactScore: number;
+  /** @nullable */
+  webSearchProvider?: string | null;
+  /** @nullable */
+  sourcesNote?: string | null;
 }
 
 export interface NeighborConnection {

@@ -44,6 +44,21 @@ class SimulationConfigIn(BaseModel):
         default=None,
         description="When set, clone pool agents from these groups; agentCount is replaced by pool size.",
     )
+    eventIds: list[int] | None = Field(
+        default=None,
+        description=(
+            "IDs of global catalog external events (simulation_id null) to include in each round's LLM context."
+        ),
+    )
+
+
+class PatchSimulationConfigRequest(BaseModel):
+    """Merge into simulation.config — currently only eventIds is supported."""
+
+    eventIds: list[int] = Field(
+        default_factory=list,
+        description="Global catalog event IDs to attach to this run (replaces previous eventIds).",
+    )
 
 
 class CreateGroupWithAgentsRequest(BaseModel):
@@ -66,6 +81,28 @@ class SuggestGroupCohortFieldsResponse(BaseModel):
     demographics: str = Field(..., min_length=1, max_length=4000)
     community: str = Field(..., min_length=1, max_length=4000)
     educationProfession: str = Field(..., min_length=1, max_length=4000)
+
+
+class SuggestEventFromWebRequest(BaseModel):
+    """Topic or keywords used for live web search before PwC GenAI fills event fields."""
+
+    query: str = Field(..., min_length=2, max_length=500)
+
+
+class SuggestEventFromWebResponse(BaseModel):
+    type: str = Field(..., min_length=1, max_length=160)
+    description: str = Field(..., min_length=1, max_length=4000)
+    impactScore: float = Field(..., ge=-1.0, le=1.0)
+    webSearchProvider: str | None = Field(
+        default=None,
+        max_length=64,
+        description="Which search backend supplied snippets (tavily, brave, …).",
+    )
+    sourcesNote: str | None = Field(
+        default=None,
+        max_length=500,
+        description="Optional one-line note from the model about source types.",
+    )
 
 
 class BeliefEvolutionSeriesPoint(BaseModel):

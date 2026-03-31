@@ -4,6 +4,7 @@ import logging
 import random
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
+from typing import Any
 
 import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -18,6 +19,7 @@ from app.models import (
     MonteCarloRequest,
     MonteCarloResultOut,
     PaginationParams,
+    PatchSimulationConfigRequest,
     SimulationGraphOut,
     SimulationListOut,
     SimulationOut,
@@ -33,6 +35,12 @@ from app.serialize import (
 )
 from app.services import belief_chart_decode, neo4j_service
 from app.services.llm_service import is_llm_available
+from app.services.simulation_report_llm import (
+    build_conversation_transcript,
+    normalize_llm_outcomes,
+    normalize_llm_string_list,
+    synthesize_report_from_conversations,
+)
 from app.services.simulation_engine import (
     run_monte_carlo,
     run_monte_carlo_stream,
@@ -553,6 +561,61 @@ async def get_simulation(id: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# PATCH /simulations/{id}/config  —  partial config (e.g. eventIds)
+# ---------------------------------------------------------------------------
+@router.patch("/simulations/{id}/config")
+async def patch_simulation_config(id: int, body: PatchSimulationConfigRequest) -> dict:
+    p = pool()
+    async with p.acquire() as conn:
+        sim = await conn.fetchrow("SELECT * FROM simulations WHERE id = $1", id)
+        if not sim:
+            raise HTTPException(status_code=404, detail="Simulation not found")
+
+        cfg = sim["config"]
+        if isinstance(cfg, str):
+            cfg = json.loads(cfg)
+
+        ids: list[int] = []
+        for x in body.eventIds:
+            try:
+                xi = int(x)
+            except (TypeError, ValueError):
+                continue
+            if xi > 0:
+                ids.append(xi)
+        ids = list(dict.fromkeys(ids))
+
+        if ids:
+            scoped = await conn.fetch(
+                "SELECT id FROM events WHERE id = ANY($1::int[]) AND simulation_id IS NOT NULL",
+                ids,
+            )
+            if scoped:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Only global catalog events (not tied to a simulation) can be selected.",
+                )
+            n = await conn.fetchval(
+                "SELECT count(*)::int FROM events WHERE id = ANY($1::int[]) AND simulation_id IS NULL",
+                ids,
+            )
+            if int(n) != len(ids):
+                raise HTTPException(
+                    status_code=400,
+                    detail="One or more event IDs are missing from the global catalog.",
+                )
+
+        cfg = {**cfg, "eventIds": ids}
+        await conn.execute(
+            "UPDATE simulations SET config = $1::jsonb WHERE id = $2",
+            json.dumps(cfg),
+            id,
+        )
+
+    return await get_simulation(id)
+
+
+# ---------------------------------------------------------------------------
 # DELETE /simulations/{id}  —  simplified with FK cascading deletes
 # ---------------------------------------------------------------------------
 @router.delete("/simulations/{id}", status_code=204)
@@ -907,48 +970,28 @@ async def montecarlo_runs(
     }
 
 
-# ---------------------------------------------------------------------------
-# GET /reports/{simulationId}
-# ---------------------------------------------------------------------------
-@router.get("/reports/{simulationId}")
-async def simulation_report(simulationId: int) -> dict:
-    p = pool()
-    async with p.acquire() as conn:
-        sim = await conn.fetchrow(
-            "SELECT * FROM simulations WHERE id = $1", simulationId
-        )
-        if not sim:
-            raise HTTPException(status_code=404, detail={"error": "Simulation not found"})
+def _report_bs_policy(agent: asyncpg.Record) -> float:
+    b = agent["belief_state"]
+    if isinstance(b, str):
+        b = json.loads(b)
+    return float(b.get("policySupport", 0))
 
-        agents = await conn.fetch(
-            "SELECT * FROM agents WHERE simulation_id = $1", simulationId
-        )
-        snapshots = await conn.fetch(
-            """SELECT * FROM belief_snapshots WHERE simulation_id = $1
-               ORDER BY round""",
-            simulationId,
-        )
-        latest_mc = await conn.fetchrow(
-            """SELECT * FROM monte_carlo_runs WHERE simulation_id = $1
-               ORDER BY created_at DESC LIMIT 1""",
-            simulationId,
-        )
 
-    def bs_policy(a) -> float:
-        b = a["belief_state"]
-        if isinstance(b, str):
-            b = json.loads(b)
-        return float(b.get("policySupport", 0))
-
+def _deterministic_report_sections(
+    sim: asyncpg.Record,
+    agents: list[asyncpg.Record],
+    snapshots: list[asyncpg.Record],
+    latest_mc: asyncpg.Record | None,
+) -> dict[str, Any]:
     sorted_agents = sorted(
         agents, key=lambda a: float(a["influence_score"]), reverse=True
     )
     avg_support = (
-        sum(bs_policy(a) for a in agents) / len(agents) if agents else 0.0
+        sum(_report_bs_policy(a) for a in agents) / len(agents) if agents else 0.0
     )
-    supportive = sum(1 for a in agents if bs_policy(a) > 0.3)
-    opposed = sum(1 for a in agents if bs_policy(a) < -0.3)
-    n = len(agents) or 1
+    supportive = sum(1 for a in agents if _report_bs_policy(a) > 0.3)
+    opposed = sum(1 for a in agents if _report_bs_policy(a) < -0.3)
+    n_agents = len(agents) or 1
 
     key_outcomes = [
         {
@@ -958,19 +1001,19 @@ async def simulation_report(simulationId: int) -> dict:
         },
         {
             "label": "Public consensus reached",
-            "probability": max(0, 1 - abs(supportive - opposed) / n),
+            "probability": max(0, 1 - abs(supportive - opposed) / n_agents),
             "impact": "medium",
         },
         {
             "label": "Social polarization risk",
-            "probability": min(1, (supportive + opposed) / n),
+            "probability": min(1, (supportive + opposed) / n_agents),
             "impact": "high"
             if supportive + opposed > len(agents) * 0.7
             else "low",
         },
     ]
 
-    risk_factors = []
+    risk_factors: list[str] = []
     if avg_support < -0.3:
         risk_factors.append("Strong opposition to policy detected")
     if supportive + opposed > len(agents) * 0.7:
@@ -1017,27 +1060,153 @@ async def simulation_report(simulationId: int) -> dict:
         for s in snapshots
     ]
 
-    now = datetime.now(timezone.utc)
+    influential_agents = [
+        {
+            "agentId": a["id"],
+            "name": a["name"],
+            "influenceScore": float(a["influence_score"]),
+            "stance": a["stance"],
+        }
+        for a in sorted_agents[:5]
+    ]
+
+    compact_stats = (
+        f"Agent count: {len(agents)}; mean policy support: {avg_support:.3f} "
+        f"(scale -1..1); supportive (policySupport>0.3): {supportive}; "
+        f"opposed (<-0.3): {opposed}; belief snapshot rows: {len(snapshots)}."
+    )
+    if latest_mc:
+        compact_stats += (
+            f" Monte Carlo: runs={latest_mc['num_runs']}, "
+            f"mean_support={float(latest_mc['mean_support']):.3f}, "
+            f"variance={float(latest_mc['variance']):.3f}."
+        )
+    else:
+        compact_stats += " No stored Monte Carlo run."
 
     return {
-        "simulationId": sim["id"],
-        "simulationName": sim["name"],
-        "generatedAt": now.isoformat(),
         "keyOutcomes": key_outcomes,
         "riskFactors": risk_factors,
-        "influentialAgents": [
-            {
-                "agentId": a["id"],
-                "name": a["name"],
-                "influenceScore": float(a["influence_score"]),
-                "stance": a["stance"],
-            }
-            for a in sorted_agents[:5]
-        ],
         "causalDrivers": causal_drivers,
         "monteCarloSummary": mc_summary,
         "beliefEvolution": belief_evolution,
+        "influentialAgents": influential_agents,
+        "compactStats": compact_stats,
     }
+
+
+async def _build_simulation_report_payload(simulation_id: int) -> dict[str, Any] | None:
+    """Full report: stats + belief evolution + optional PwC GenAI synthesis from posts/comments."""
+    p = pool()
+    async with p.acquire() as conn:
+        sim = await conn.fetchrow(
+            "SELECT * FROM simulations WHERE id = $1", simulation_id
+        )
+        if not sim:
+            return None
+
+        agents = await conn.fetch(
+            "SELECT * FROM agents WHERE simulation_id = $1", simulation_id
+        )
+        snapshots = await conn.fetch(
+            """SELECT * FROM belief_snapshots WHERE simulation_id = $1
+               ORDER BY round""",
+            simulation_id,
+        )
+        latest_mc = await conn.fetchrow(
+            """SELECT * FROM monte_carlo_runs WHERE simulation_id = $1
+               ORDER BY created_at DESC LIMIT 1""",
+            simulation_id,
+        )
+        posts = await conn.fetch(
+            """SELECT * FROM posts WHERE simulation_id = $1
+               ORDER BY round ASC, created_at ASC LIMIT 400""",
+            simulation_id,
+        )
+        try:
+            comments = await conn.fetch(
+                """SELECT * FROM comments WHERE simulation_id = $1
+                   ORDER BY round ASC, created_at ASC LIMIT 800""",
+                simulation_id,
+            )
+        except asyncpg.exceptions.UndefinedTableError:
+            logger.warning("comments table missing — report will omit replies")
+            comments = []
+
+    amap = {a["id"]: a["name"] for a in agents}
+    det = _deterministic_report_sections(sim, agents, snapshots, latest_mc)
+    transcript = build_conversation_transcript(
+        posts=posts, comments=comments, agent_names=amap
+    )
+    compact = (
+        det["compactStats"]
+        + f"\nPosts in corpus: {len(posts)}; Comments: {len(comments)}."
+    )
+
+    llm = await synthesize_report_from_conversations(
+        simulation_name=sim["name"] or "",
+        simulation_description=(sim["description"] or "").strip(),
+        current_round=int(sim["current_round"] or 0),
+        transcript=transcript,
+        compact_stats=compact,
+        baseline_key_outcomes=det["keyOutcomes"],
+        baseline_risk_factors=det["riskFactors"],
+        baseline_causal_drivers=det["causalDrivers"],
+    )
+
+    now = datetime.now(timezone.utc)
+    report: dict[str, Any] = {
+        "simulationId": sim["id"],
+        "simulationName": sim["name"],
+        "generatedAt": now.isoformat(),
+        "keyOutcomes": det["keyOutcomes"],
+        "riskFactors": det["riskFactors"],
+        "influentialAgents": det["influentialAgents"],
+        "causalDrivers": det["causalDrivers"],
+        "monteCarloSummary": det["monteCarloSummary"],
+        "beliefEvolution": det["beliefEvolution"],
+        "executiveSummary": "",
+        "conversationTranscriptChars": len(transcript.strip()),
+        "llmSynthesized": False,
+    }
+
+    if llm:
+        report["executiveSummary"] = str(llm.get("executiveSummary") or "").strip()[:12000]
+        ko = normalize_llm_outcomes(llm.get("keyOutcomes"))
+        if ko:
+            report["keyOutcomes"] = ko
+        rf = normalize_llm_string_list(llm.get("riskFactors"))
+        if rf:
+            report["riskFactors"] = rf
+        cd = normalize_llm_string_list(llm.get("causalDrivers"))
+        if cd:
+            report["causalDrivers"] = cd
+        report["llmSynthesized"] = True
+    else:
+        if not is_llm_available():
+            report["executiveSummary"] = (
+                "This report uses aggregate agent beliefs, snapshots, and Monte Carlo output. "
+                "Configure PwC GenAI (API key or bearer token) to add a narrative grounded in "
+                "post and comment threads."
+            )
+        else:
+            report["executiveSummary"] = (
+                "GenAI narrative synthesis did not complete; showing statistical baselines below. "
+                "Retry or check GenAI connectivity and logs."
+            )
+
+    return report
+
+
+# ---------------------------------------------------------------------------
+# GET /reports/{simulationId}
+# ---------------------------------------------------------------------------
+@router.get("/reports/{simulationId}")
+async def simulation_report(simulationId: int) -> dict:
+    payload = await _build_simulation_report_payload(simulationId)
+    if not payload:
+        raise HTTPException(status_code=404, detail={"error": "Simulation not found"})
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -1047,154 +1216,18 @@ async def simulation_report(simulationId: int) -> dict:
 async def simulation_report_stream(simulationId: int) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:
         try:
-            yield _sse({"type": "status", "phase": "init", "message": "Loading simulation data..."})
-
-            p = pool()
-            async with p.acquire() as conn:
-                sim = await conn.fetchrow(
-                    "SELECT * FROM simulations WHERE id = $1", simulationId
-                )
-                if not sim:
-                    yield _sse({"type": "error", "message": "Simulation not found"})
-                    return
-
-                yield _sse({"type": "status", "phase": "agents", "message": "Analyzing agent states..."})
-
-                agents = await conn.fetch(
-                    "SELECT * FROM agents WHERE simulation_id = $1", simulationId
-                )
-
-                yield _sse({
-                    "type": "status",
-                    "phase": "snapshots",
-                    "message": f"Loading belief snapshots for {len(agents)} agents...",
-                })
-
-                snapshots = await conn.fetch(
-                    """SELECT * FROM belief_snapshots WHERE simulation_id = $1
-                       ORDER BY round""",
-                    simulationId,
-                )
-
-                yield _sse({"type": "status", "phase": "montecarlo", "message": "Fetching Monte Carlo data..."})
-
-                latest_mc = await conn.fetchrow(
-                    """SELECT * FROM monte_carlo_runs WHERE simulation_id = $1
-                       ORDER BY created_at DESC LIMIT 1""",
-                    simulationId,
-                )
-
-            yield _sse({"type": "status", "phase": "computing", "message": "Computing key outcomes..."})
-
-            def bs_policy(a) -> float:
-                b = a["belief_state"]
-                if isinstance(b, str):
-                    b = json.loads(b)
-                return float(b.get("policySupport", 0))
-
-            sorted_agents = sorted(
-                agents, key=lambda a: float(a["influence_score"]), reverse=True
-            )
-            avg_support = (
-                sum(bs_policy(a) for a in agents) / len(agents) if agents else 0.0
-            )
-            supportive = sum(1 for a in agents if bs_policy(a) > 0.3)
-            opposed = sum(1 for a in agents if bs_policy(a) < -0.3)
-            n = len(agents) or 1
-
-            key_outcomes = [
-                {
-                    "label": "Policy adoption likelihood",
-                    "probability": max(0, min(1, (avg_support + 1) / 2)),
-                    "impact": "high" if avg_support > 0.3 else "medium" if avg_support > 0 else "low",
-                },
-                {
-                    "label": "Public consensus reached",
-                    "probability": max(0, 1 - abs(supportive - opposed) / n),
-                    "impact": "medium",
-                },
-                {
-                    "label": "Social polarization risk",
-                    "probability": min(1, (supportive + opposed) / n),
-                    "impact": "high" if supportive + opposed > len(agents) * 0.7 else "low",
-                },
-            ]
-
-            yield _sse({"type": "status", "phase": "risks", "message": "Evaluating risk factors..."})
-
-            risk_factors = []
-            if avg_support < -0.3:
-                risk_factors.append("Strong opposition to policy detected")
-            if supportive + opposed > len(agents) * 0.7:
-                risk_factors.append("High polarization among agents")
-            if len(agents) < 5:
-                risk_factors.append("Low sample size may affect prediction accuracy")
-            if sim["current_round"] < 3:
-                risk_factors.append("Insufficient simulation rounds for convergence")
-            risk_factors.append("External events may significantly alter outcomes")
-
-            causal_drivers = [
-                "Agent influence network topology",
-                "Initial belief state distribution",
-                "Learning rate and signal propagation",
-                "Activity level and engagement patterns",
-                "Source credibility weighting",
-            ]
-
-            yield _sse({"type": "status", "phase": "influencers", "message": "Identifying key influencers..."})
-
-            if latest_mc:
-                mc_summary = {
-                    "totalRuns": latest_mc["num_runs"],
-                    "meanSupport": float(latest_mc["mean_support"]),
-                    "variance": float(latest_mc["variance"]),
-                    "confidenceInterval": [
-                        float(latest_mc["min_support"]),
-                        float(latest_mc["max_support"]),
-                    ],
-                }
-            else:
-                mc_summary = {
-                    "totalRuns": 0,
-                    "meanSupport": avg_support,
-                    "variance": 0.0,
-                    "confidenceInterval": [avg_support, avg_support],
-                }
-
-            belief_evolution = [
-                {
-                    "round": s["round"],
-                    "averagePolicySupport": float(s["average_policy_support"]),
-                    "averageTrustInGovernment": float(s["average_trust_in_government"]),
-                    "averageEconomicOutlook": float(s["average_economic_outlook"]),
-                }
-                for s in snapshots
-            ]
-
-            now = datetime.now(timezone.utc)
-
+            yield _sse({"type": "status", "phase": "init", "message": "Loading simulation data…"})
             yield _sse({
-                "type": "complete",
-                "report": {
-                    "simulationId": sim["id"],
-                    "simulationName": sim["name"],
-                    "generatedAt": now.isoformat(),
-                    "keyOutcomes": key_outcomes,
-                    "riskFactors": risk_factors,
-                    "influentialAgents": [
-                        {
-                            "agentId": a["id"],
-                            "name": a["name"],
-                            "influenceScore": float(a["influence_score"]),
-                            "stance": a["stance"],
-                        }
-                        for a in sorted_agents[:5]
-                    ],
-                    "causalDrivers": causal_drivers,
-                    "monteCarloSummary": mc_summary,
-                    "beliefEvolution": belief_evolution,
-                },
+                "type": "status",
+                "phase": "synthesis",
+                "message": "Analyzing agents, beliefs, Monte Carlo, and conversation threads…",
             })
+            payload = await _build_simulation_report_payload(simulationId)
+            if not payload:
+                yield _sse({"type": "error", "message": "Simulation not found"})
+                return
+            yield _sse({"type": "status", "phase": "finalize", "message": "Report ready"})
+            yield _sse({"type": "complete", "report": payload})
         except Exception as exc:
             logger.exception("report-stream failed for simulation %s", simulationId)
             yield _sse({"type": "error", "message": str(exc)})

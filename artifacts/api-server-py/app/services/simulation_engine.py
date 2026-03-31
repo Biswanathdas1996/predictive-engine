@@ -357,6 +357,50 @@ def _config_policy_id(cfg: dict[str, Any]) -> int | None:
     return pid if pid > 0 else None
 
 
+def _config_event_ids(cfg: dict[str, Any]) -> list[int]:
+    """Positive ints from config.eventIds, de-duplicated, order preserved."""
+    raw = cfg.get("eventIds")
+    if not raw:
+        return []
+    out: list[int] = []
+    for x in raw:
+        try:
+            xi = int(x)
+        except (TypeError, ValueError):
+            continue
+        if xi > 0:
+            out.append(xi)
+    return list(dict.fromkeys(out))
+
+
+async def _external_events_prompt_text(
+    conn: asyncpg.Connection, cfg: dict[str, Any]
+) -> str | None:
+    """Load global catalog events listed in config.eventIds for LLM context."""
+    ids = _config_event_ids(cfg)
+    if not ids:
+        return None
+    rows = await conn.fetch(
+        """
+        SELECT type, description, impact_score
+        FROM events
+        WHERE id = ANY($1::int[]) AND simulation_id IS NULL
+        ORDER BY array_position($1::int[], id)
+        """,
+        ids,
+    )
+    if not rows:
+        return None
+    lines: list[str] = []
+    for r in rows:
+        desc = str(r["description"] or "").strip().replace("\n", " ")
+        if len(desc) > 240:
+            desc = desc[:237] + "..."
+        t = str(r["type"] or "").strip() or "(untitled)"
+        lines.append(f"{t} (impact {float(r['impact_score']):+.2f}): {desc}")
+    return "\n".join(lines)
+
+
 async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
     p = pool()
     async with p.acquire() as conn:
@@ -501,6 +545,8 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
 
             prior_feed_ids = [int(p["id"]) for p in recent_posts if p.get("id") is not None]
 
+            external_event_context = await _external_events_prompt_text(conn, cfg)
+
             # ── Phase 2: Belief propagation + LLM generation (no DB needed) ──
             agents_by_id = {a["id"]: a for a in agents}
             agent_rows: dict[int, AgentRow] = {}
@@ -546,8 +592,13 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                 for a in agents
             ]
             orch_prompt = build_orchestrator_prompt(
-                orch_agents, recent_posts, comments_by_post,
-                round_mode, new_round, policy_brief,
+                orch_agents,
+                recent_posts,
+                comments_by_post,
+                round_mode,
+                new_round,
+                policy_brief,
+                external_event_context,
             )
             orchestrator_plan: dict[int, dict[str, Any]] = {}
             try:
@@ -662,6 +713,7 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                     new_round,
                     recent_posts,
                     neighbor_list,
+                    event=external_event_context,
                     policy_brief=policy_brief,
                     llm_only=True,
                     round_mode=round_mode,
@@ -1074,6 +1126,8 @@ async def run_simulation_round_stream(
 
             prior_feed_ids = [int(p["id"]) for p in recent_posts if p.get("id") is not None]
 
+            external_event_context = await _external_events_prompt_text(conn, cfg)
+
             # Belief propagation
             yield {"type": "status", "phase": "beliefs", "message": "Propagating beliefs through influence network..."}
             agents_by_id = {a["id"]: a for a in agents}
@@ -1133,8 +1187,13 @@ async def run_simulation_round_stream(
                 for a in agents
             ]
             orch_prompt = build_orchestrator_prompt(
-                orch_agents, recent_posts, comments_by_post,
-                round_mode, new_round, policy_brief,
+                orch_agents,
+                recent_posts,
+                comments_by_post,
+                round_mode,
+                new_round,
+                policy_brief,
+                external_event_context,
             )
             orchestrator_plan: dict[int, dict[str, Any]] = {}
             try:
@@ -1255,6 +1314,7 @@ async def run_simulation_round_stream(
                     new_round,
                     recent_posts,
                     neighbor_list,
+                    event=external_event_context,
                     policy_brief=policy_brief,
                     llm_only=True,
                     round_mode=round_mode,

@@ -19,11 +19,14 @@ app/services/__init__.py
 app/services/agent_cohort.py
 app/services/belief_chart_decode.py
 app/services/document_text.py
+app/services/event_suggest_web.py
+app/services/event_web_search.py
 app/services/llm_config_loader.py
 app/services/llm_service.py
 app/services/neo4j_service.py
 app/services/prompt_templates.py
 app/services/simulation_engine.py
+app/services/simulation_report_llm.py
 app/services/vertex_document.py
 predictive_api.egg-info/PKG-INFO
 predictive_api.egg-info/SOURCES.txt

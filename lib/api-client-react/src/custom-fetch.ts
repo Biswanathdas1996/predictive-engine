@@ -153,6 +153,27 @@ function buildErrorMessage(response: Response, data: unknown): string {
     return text ? `${prefix}: ${truncate(text)}` : prefix;
   }
 
+  if (data && typeof data === "object") {
+    const rec = data as Record<string, unknown>;
+    const d = rec.detail;
+    if (typeof d === "string" && d.trim()) {
+      return `${prefix}: ${truncate(d.trim())}`;
+    }
+    if (d && typeof d === "object" && !Array.isArray(d)) {
+      const inner = (d as Record<string, unknown>).error;
+      if (typeof inner === "string" && inner.trim()) {
+        return `${prefix}: ${truncate(inner.trim())}`;
+      }
+    }
+    if (Array.isArray(d) && d.length > 0 && d[0] && typeof d[0] === "object") {
+      const first = d[0] as Record<string, unknown>;
+      const msg = first.msg;
+      if (typeof msg === "string" && msg.trim()) {
+        return `${prefix}: ${truncate(msg.trim())}`;
+      }
+    }
+  }
+
   const title = getStringField(data, "title");
   const detail = getStringField(data, "detail");
   const message =

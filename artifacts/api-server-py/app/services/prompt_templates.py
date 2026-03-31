@@ -362,11 +362,17 @@ def build_orchestrator_prompt(
     round_mode: int,
     round_number: int,
     policy_brief: str | None = None,
+    external_events: str | None = None,
 ) -> str:
     """Build the orchestrator prompt that plans the entire round."""
 
     mode_desc = _ROUND_MODE_DESCRIPTIONS.get(round_mode, _ROUND_MODE_DESCRIPTIONS[1])
     policy_block = f"\nPOLICY UNDER DEBATE:\n{policy_brief}\n" if policy_brief else ""
+    event_block = (
+        f"\n━━━ EXTERNAL SHOCKS (context every agent knows; choreography may reference them) ━━━\n{external_events}\n"
+        if external_events
+        else ""
+    )
 
     # ── Agent profiles with full conversation history ───────────────────────
     agents_lines: list[str] = []
@@ -422,7 +428,7 @@ def build_orchestrator_prompt(
     return f"""You are the MASTER DIRECTOR of a social-media debate simulation.
 Your job is to choreograph each agent's next move so that Round {round_number} produces the most intellectually alive, emotionally charged, and narratively compelling conversation possible.
 You know every agent's identity, history, beliefs, and everything said so far.
-{policy_block}
+{policy_block}{event_block}
 ━━━ ROUND {round_number} — {mode_desc} ━━━
 
 ━━━ AGENT PROFILES + CONVERSATION HISTORY ━━━

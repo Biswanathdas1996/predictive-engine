@@ -2,7 +2,7 @@ import asyncio
 import json
 import random
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.auth import require_auth
 from app.db import pool
@@ -78,6 +78,44 @@ async def create_group(body: dict) -> dict:
             json.dumps(spec),
         )
     return group_row(row)
+
+
+@router.delete("/groups/{id}", status_code=204)
+async def delete_group(id: int) -> Response:
+    """Remove the group, pool agents (simulation_id IS NULL), and clear group_id on simulation clones."""
+    p = pool()
+    async with p.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow("SELECT id FROM groups WHERE id = $1", id)
+            if not row:
+                raise HTTPException(
+                    status_code=404, detail={"error": "Group not found"}
+                )
+
+            pool_ids = [
+                r["id"]
+                for r in await conn.fetch(
+                    "SELECT id FROM agents WHERE group_id = $1 AND simulation_id IS NULL",
+                    id,
+                )
+            ]
+            if pool_ids:
+                await conn.execute(
+                    """DELETE FROM influences
+                       WHERE source_agent_id = ANY($1::int[])
+                          OR target_agent_id = ANY($1::int[])""",
+                    pool_ids,
+                )
+                await conn.execute(
+                    "DELETE FROM agents WHERE id = ANY($1::int[])", pool_ids
+                )
+
+            await conn.execute(
+                "UPDATE agents SET group_id = NULL WHERE group_id = $1", id
+            )
+            await conn.execute("DELETE FROM groups WHERE id = $1", id)
+
+    return Response(status_code=204)
 
 
 @router.post(

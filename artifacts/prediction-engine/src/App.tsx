@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import { Layout } from "./components/Layout";
 import Dashboard from "./pages/Dashboard";
 import Agents from "./pages/Agents";
+import AgentDetail from "./pages/AgentDetail";
 import Simulations from "./pages/Simulations";
 import SimulationDetail from "./pages/SimulationDetail";
 import MonteCarlo from "./pages/MonteCarlo";
@@ -30,6 +31,7 @@ function Router() {
     <Layout>
       <Switch>
         <Route path="/" component={Dashboard} />
+        <Route path="/agents/:id" component={AgentDetail} />
         <Route path="/agents" component={Agents} />
         <Route path="/simulations" component={Simulations} />
         <Route path="/simulations/:id" component={SimulationDetail} />

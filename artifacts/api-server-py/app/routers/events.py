@@ -1,10 +1,14 @@
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.auth import require_auth
 from app.db import pool
+from app.models import SuggestEventFromWebRequest, SuggestEventFromWebResponse
+from app.rate_limit import rate_limit_dependency
 from app.serialize import event_row
 from app.services import neo4j_service
+from app.services.event_suggest_web import suggest_event_from_web
 
 router = APIRouter()
 
@@ -44,3 +48,21 @@ async def create_event(body: dict) -> dict:
     out = event_row(row)
     asyncio.create_task(neo4j_service.sync_event_to_graph(out))
     return out
+
+
+@router.post(
+    "/events/suggest-from-web",
+    dependencies=[Depends(require_auth), Depends(rate_limit_dependency)],
+)
+async def suggest_event_from_web_endpoint(
+    body: SuggestEventFromWebRequest,
+) -> SuggestEventFromWebResponse:
+    """Ollama Cloud web search + PwC GenAI to fill event fields."""
+    try:
+        raw = await suggest_event_from_web(query=body.query)
+        return SuggestEventFromWebResponse(**raw)
+    except RuntimeError as exc:
+        # String detail so clients (customFetch buildErrorMessage) surface the message in toasts.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

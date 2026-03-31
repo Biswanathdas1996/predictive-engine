@@ -229,6 +229,35 @@ paths:
         "204":
           description: Simulation deleted
 
+  /simulations/{id}/config:
+    patch:
+      operationId: patchSimulationConfig
+      tags: [simulations]
+      summary: Update simulation config (e.g. selected global event IDs)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchSimulationConfigBody"
+      responses:
+        "200":
+          description: Updated simulation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Simulation"
+        "400":
+          description: Invalid event IDs
+        "404":
+          description: Simulation not found
+
   /simulations/{id}/run:
     post:
       operationId: runSimulationRound
@@ -425,6 +454,23 @@ paths:
               schema:
                 $ref: "#/components/schemas/Group"
 
+  /groups/{id}:
+    delete:
+      operationId: deleteGroup
+      tags: [groups]
+      summary: Delete a group
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Group deleted
+        "404":
+          description: Group not found
+
   /groups/suggest-cohort-fields:
     post:
       operationId: suggestGroupCohortFields
@@ -586,6 +632,37 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Event"
+
+  /events/suggest-from-web:
+    post:
+      operationId: suggestEventFromWeb
+      tags: [simulations]
+      summary: Draft event from live web search and PwC GenAI
+      description: >-
+        Runs Ollama Cloud web search (OLLAMA_API_KEY), then PwC GenAI to produce type, description,
+        and impact score for the inject-event form.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuggestEventFromWebBody"
+      responses:
+        "200":
+          description: Suggested event fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuggestEventFromWebResult"
+        "503":
+          description: Web search or LLM unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: object
 
 components:
   schemas:
@@ -802,10 +879,27 @@ components:
           items:
             type: integer
           description: Clone pool agents from these groups into the new simulation (ignores template agentCount).
+        eventIds:
+          type: array
+          items:
+            type: integer
+          description: >-
+            Global catalog event IDs (events with no simulation scope) to pass into each round's LLM prompts.
       required:
         - learningRate
         - numRounds
         - agentCount
+
+    PatchSimulationConfigBody:
+      type: object
+      properties:
+        eventIds:
+          type: array
+          items:
+            type: integer
+          description: Replaces config.eventIds with this list (global catalog IDs only).
+      required:
+        - eventIds
 
     CreateSimulationBody:
       type: object
@@ -1500,6 +1594,34 @@ components:
           type: number
         simulationId:
           type: ["integer", "null"]
+      required:
+        - type
+        - description
+        - impactScore
+
+    SuggestEventFromWebBody:
+      type: object
+      properties:
+        query:
+          type: string
+          minLength: 2
+          maxLength: 500
+      required:
+        - query
+
+    SuggestEventFromWebResult:
+      type: object
+      properties:
+        type:
+          type: string
+        description:
+          type: string
+        impactScore:
+          type: number
+        webSearchProvider:
+          type: ["string", "null"]
+        sourcesNote:
+          type: ["string", "null"]
       required:
         - type
         - description

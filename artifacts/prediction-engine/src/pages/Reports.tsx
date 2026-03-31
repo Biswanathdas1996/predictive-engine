@@ -1,10 +1,20 @@
 import { useState, useCallback, useRef } from "react";
 import { useListSimulations, type Simulation } from "@workspace/api-client-react";
-import { FileText, Target, AlertTriangle, Users, GitMerge, Download, Radio } from "lucide-react";
+import {
+  FileText,
+  Target,
+  AlertTriangle,
+  Users,
+  GitMerge,
+  Download,
+  Radio,
+  Sparkles,
+} from "lucide-react";
 import { formatPercent, formatScore } from "@/lib/utils";
 import { format } from "date-fns";
 import { normalizeApiArray } from "@/lib/utils";
 import { consumeSSEStream, type SSEEvent } from "@/lib/sse";
+import { Button } from "@/components/ui/button";
 
 interface Report {
   simulationId: number;
@@ -16,6 +26,9 @@ interface Report {
   causalDrivers: string[];
   monteCarloSummary: { totalRuns: number; meanSupport: number; variance: number; confidenceInterval: number[] };
   beliefEvolution: { round: number; averagePolicySupport: number; averageTrustInGovernment: number; averageEconomicOutlook: number }[];
+  executiveSummary?: string;
+  conversationTranscriptChars?: number;
+  llmSynthesized?: boolean;
 }
 
 export default function Reports() {
@@ -31,15 +44,12 @@ export default function Reports() {
   const abortRef = useRef<AbortController | null>(null);
 
   const loadReport = useCallback((simId: string) => {
-    setSelectedSim(simId);
-    if (!simId) {
-      setReport(null);
-      return;
-    }
+    if (!simId) return;
 
+    abortRef.current?.abort();
     setIsLoading(true);
     setReport(null);
-    setStreamMessage("Loading...");
+    setStreamMessage("Starting…");
     setStreamPhase("init");
 
     const abort = new AbortController();
@@ -69,6 +79,8 @@ export default function Reports() {
     });
   }, []);
 
+  const REPORT_PHASES = ["init", "synthesis", "finalize"] as const;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -80,19 +92,41 @@ export default function Reports() {
           <p className="text-muted-foreground mt-1">Executive summaries of simulation outcomes and key drivers.</p>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <select
             value={selectedSim}
-            onChange={(e) => loadReport(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setSelectedSim(v);
+              setReport(null);
+              setStreamMessage("");
+              setStreamPhase("");
+            }}
             className="bg-card border border-border rounded-xl px-4 py-2 text-sm font-medium focus:outline-none focus:border-primary shadow-sm min-w-[250px]"
             disabled={isLoading}
           >
-            <option value="">Select a simulation...</option>
-            {simulationList.map(s => (
-              <option key={s.id} value={s.id}>{s.name}</option>
+            <option value="">Select a simulation…</option>
+            {simulationList.map((s) => (
+              <option key={s.id} value={String(s.id)}>
+                {s.name}
+              </option>
             ))}
           </select>
+          <Button
+            type="button"
+            className="gap-2 rounded-xl font-medium shadow-sm"
+            disabled={isLoading || !selectedSim}
+            onClick={() => void loadReport(selectedSim)}
+          >
+            {isLoading ? (
+              <Radio className="h-4 w-4 animate-pulse" />
+            ) : (
+              <Sparkles className="h-4 w-4" />
+            )}
+            Generate report
+          </Button>
           <button
+            type="button"
             disabled={!report}
             className="flex items-center gap-2 bg-secondary text-secondary-foreground px-4 py-2 rounded-xl font-medium hover:bg-secondary/80 disabled:opacity-50 transition-colors"
           >
@@ -104,7 +138,10 @@ export default function Reports() {
       {!selectedSim ? (
         <div className="h-[60vh] flex flex-col justify-center items-center bg-card/30 border border-border/30 border-dashed rounded-3xl">
           <FileText className="w-16 h-16 text-muted-foreground opacity-30 mb-4" />
-          <p className="text-lg text-muted-foreground">Select a simulation to generate report</p>
+          <p className="text-lg text-muted-foreground">Choose a simulation, then click Generate report</p>
+          <p className="text-sm text-muted-foreground/80 mt-2 max-w-md text-center">
+            The report uses PwC GenAI to read posts and replies, combined with agent stats and Monte Carlo output.
+          </p>
         </div>
       ) : isLoading ? (
         <div className="h-[60vh] flex flex-col justify-center items-center bg-card rounded-3xl border border-border">
@@ -115,17 +152,19 @@ export default function Reports() {
             <span className="font-mono">{streamMessage}</span>
           </div>
           <div className="mt-3 flex gap-1.5">
-            {["init", "agents", "snapshots", "montecarlo", "computing", "risks", "influencers"].map((phase) => (
-              <div
-                key={phase}
-                className={`h-1.5 w-8 rounded-full transition-all duration-500 ${
-                  streamPhase === phase ? "bg-primary scale-110" :
-                  ["init", "agents", "snapshots", "montecarlo", "computing", "risks", "influencers"].indexOf(phase) <
-                  ["init", "agents", "snapshots", "montecarlo", "computing", "risks", "influencers"].indexOf(streamPhase)
-                    ? "bg-primary/40" : "bg-secondary"
-                }`}
-              />
-            ))}
+            {REPORT_PHASES.map((phase, i) => {
+              const cur = (REPORT_PHASES as readonly string[]).indexOf(streamPhase);
+              const done = cur >= 0 && i < cur;
+              const active = streamPhase === phase;
+              return (
+                <div
+                  key={phase}
+                  className={`h-1.5 w-10 rounded-full transition-all duration-500 ${
+                    active ? "bg-primary scale-110" : done ? "bg-primary/40" : "bg-secondary"
+                  }`}
+                />
+              );
+            })}
           </div>
         </div>
       ) : report ? (
@@ -136,9 +175,19 @@ export default function Reports() {
               <div>
                 <div className="text-xs font-mono text-primary uppercase tracking-wider mb-2">Classified Prediction Document</div>
                 <h2 className="text-3xl font-bold text-foreground mb-2">{report.simulationName}</h2>
-                <div className="text-sm text-muted-foreground flex items-center gap-4">
+                <div className="text-sm text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1">
                   <span>ID: SIM-{report.simulationId}</span>
-                  <span>Generated: {format(new Date(report.generatedAt), 'PPpp')}</span>
+                  <span>Generated: {format(new Date(report.generatedAt), "PPpp")}</span>
+                  {report.llmSynthesized ? (
+                    <span className="rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">
+                      GenAI + dialogue
+                    </span>
+                  ) : null}
+                  {typeof report.conversationTranscriptChars === "number" ? (
+                    <span className="text-xs opacity-80">
+                      Transcript chars: {report.conversationTranscriptChars}
+                    </span>
+                  ) : null}
                 </div>
               </div>
               <div className="text-right">
@@ -149,6 +198,18 @@ export default function Reports() {
               </div>
             </div>
           </div>
+
+          {report.executiveSummary ? (
+            <div className="border-b border-border bg-muted/25 px-8 py-6">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-primary mb-3 flex items-center gap-2">
+                <Sparkles className="h-4 w-4" />
+                Executive narrative (from agent conversations)
+              </h3>
+              <div className="prose prose-sm dark:prose-invert max-w-none text-muted-foreground leading-relaxed whitespace-pre-wrap">
+                {report.executiveSummary}
+              </div>
+            </div>
+          ) : null}
 
           <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8">
             {/* Left Column */}
@@ -220,7 +281,13 @@ export default function Reports() {
             </div>
           </div>
         </div>
-      ) : null}
+      ) : (
+        <div className="h-[40vh] flex flex-col justify-center items-center bg-card/30 border border-border/30 border-dashed rounded-3xl">
+          <p className="text-muted-foreground">
+            Click &quot;Generate report&quot; to run GenAI on this simulation&apos;s threads.
+          </p>
+        </div>
+      )}
     </div>
   );
 }
