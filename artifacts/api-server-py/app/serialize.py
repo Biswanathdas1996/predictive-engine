@@ -56,15 +56,8 @@ def _float_col(r: asyncpg.Record, col: str, default: float) -> float:
         return default
 
 
-def agent_row(r: asyncpg.Record) -> dict[str, Any]:
-    bs = normalize_belief_state_json(r["belief_state"])
-
-    cred = _float_col(r, "credibility_score", 0.5)
-    act = _float_col(r, "activity_level", 0.5)
-    # Legacy / corrupt rows sometimes have both stuck at 0 while influence is set.
-    if cred <= 0.0 and act <= 0.0 and _float_col(r, "influence_score", 0.0) > 0.01:
-        cred, act = 0.5, 0.5
-
+def normalize_agent_demographics(r: asyncpg.Record) -> tuple[int, str, str, str]:
+    """Age, gender, region, occupation with the same defaults as agent_row."""
     try:
         age = int(r["age"])
     except (TypeError, ValueError):
@@ -75,6 +68,19 @@ def agent_row(r: asyncpg.Record) -> dict[str, Any]:
     gender = str(r.get("gender") or "").strip() or "unspecified"
     region = str(r.get("region") or "").strip() or "Unknown"
     occupation = str(r.get("occupation") or "").strip() or "Unknown"
+    return age, gender, region, occupation
+
+
+def agent_row(r: asyncpg.Record) -> dict[str, Any]:
+    bs = normalize_belief_state_json(r["belief_state"])
+
+    cred = _float_col(r, "credibility_score", 0.5)
+    act = _float_col(r, "activity_level", 0.5)
+    # Legacy / corrupt rows sometimes have both stuck at 0 while influence is set.
+    if cred <= 0.0 and act <= 0.0 and _float_col(r, "influence_score", 0.0) > 0.01:
+        cred, act = 0.5, 0.5
+
+    age, gender, region, occupation = normalize_agent_demographics(r)
     persona = str(r.get("persona") or "").strip()
     if not persona:
         persona = (
@@ -131,7 +137,12 @@ def simulation_row(
     }
 
 
-def post_row(r: asyncpg.Record, *, agent_name: str | None = None) -> dict[str, Any]:
+def post_row(
+    r: asyncpg.Record,
+    *,
+    agent_name: str | None = None,
+    agent: asyncpg.Record | None = None,
+) -> dict[str, Any]:
     tags = r["topic_tags"]
     if tags is None:
         tags = []
@@ -148,11 +159,22 @@ def post_row(r: asyncpg.Record, *, agent_name: str | None = None) -> dict[str, A
     }
     if agent_name is not None:
         out["agentName"] = agent_name
+    if agent is not None:
+        age, gender, region, occupation = normalize_agent_demographics(agent)
+        out["agentAge"] = age
+        out["agentGender"] = gender
+        out["agentRegion"] = region
+        out["agentOccupation"] = occupation
     return out
 
 
-def comment_row(r: asyncpg.Record, *, agent_name: str) -> dict[str, Any]:
-    return {
+def comment_row(
+    r: asyncpg.Record,
+    *,
+    agent_name: str,
+    agent: asyncpg.Record | None = None,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "id": r["id"],
         "content": r["content"],
         "sentiment": float(r["sentiment"]),
@@ -163,6 +185,13 @@ def comment_row(r: asyncpg.Record, *, agent_name: str) -> dict[str, Any]:
         "simulationId": r["simulation_id"],
         "createdAt": _dt(r["created_at"]),
     }
+    if agent is not None:
+        age, gender, region, occupation = normalize_agent_demographics(agent)
+        out["agentAge"] = age
+        out["agentGender"] = gender
+        out["agentRegion"] = region
+        out["agentOccupation"] = occupation
+    return out
 
 
 def policy_attachment_meta_row(r: asyncpg.Record) -> dict[str, Any]:

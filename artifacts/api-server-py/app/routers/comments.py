@@ -15,11 +15,15 @@ async def list_post_comments(postId: int) -> list[dict]:
                ORDER BY created_at DESC""",
             postId,
         )
-        agents = await conn.fetch("SELECT id, name FROM agents")
-    name_by_id = {a["id"]: a["name"] for a in agents}
+        agents = await conn.fetch(
+            "SELECT id, name, age, gender, region, occupation FROM agents"
+        )
+    agents_by_id = {a["id"]: a for a in agents}
     return [
         comment_row(
-            c, agent_name=name_by_id.get(c["agent_id"], "Unknown")
+            c,
+            agent_name=(rec["name"] if (rec := agents_by_id.get(c["agent_id"])) else "Unknown"),
+            agent=rec if rec else None,
         )
         for c in comments
     ]
@@ -68,10 +72,15 @@ async def list_simulation_comments(
             limit,
         )
         agents = await conn.fetch(
-            "SELECT id, name FROM agents WHERE simulation_id = $1", simulationId
+            "SELECT id, name, age, gender, region, occupation FROM agents WHERE simulation_id = $1",
+            simulationId,
         )
-    name_by_id = {a["id"]: a["name"] for a in agents}
+    agents_by_id = {a["id"]: a for a in agents}
     return [
-        comment_row(c, agent_name=name_by_id.get(c["agent_id"], "Unknown"))
+        comment_row(
+            c,
+            agent_name=(rec["name"] if (rec := agents_by_id.get(c["agent_id"])) else "Unknown"),
+            agent=rec if rec else None,
+        )
         for c in comments
     ]

@@ -201,7 +201,7 @@ async def agent_neighborhood(id: int) -> dict:
             id,
         )
         posts_out = [
-            post_row(pr, agent_name=agent["name"]) for pr in posts
+            post_row(pr, agent_name=agent["name"], agent=agent) for pr in posts
         ]
 
     return {

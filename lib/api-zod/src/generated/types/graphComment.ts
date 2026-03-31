@@ -16,4 +16,9 @@ export interface GraphComment {
   postId: number;
   simulationId: number;
   createdAt?: Date | null;
+  /** Persona age from agent record */
+  agentAge?: number;
+  agentGender?: string;
+  agentRegion?: string;
+  agentOccupation?: string;
 }

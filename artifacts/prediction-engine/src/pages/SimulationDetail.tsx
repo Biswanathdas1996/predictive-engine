@@ -24,7 +24,6 @@ import {
   ArrowLeft,
   Network,
   Radio,
-  CornerDownRight,
   BarChart2,
   Info,
   Settings,
@@ -34,17 +33,26 @@ import {
   Share2,
   MessageCircle,
   Zap,
+  Clock,
+  Bot,
+  Rss,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Orbit,
+  Hash,
+  MessagesSquare,
+  Reply,
+  CalendarDays,
+  UserRound,
+  User,
+  CircleUserRound,
+  MapPin,
+  Briefcase,
 } from "lucide-react";
 import { Link } from "wouter";
 import { cn, formatScore, normalizeApiArray } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
-
-function initialsFromName(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
 
 function shortFeedTime(iso: string | undefined): string {
   if (!iso) return "";
@@ -121,6 +129,159 @@ function avatarGradientClass(agentId: number): string {
   ];
   return palettes[Math.abs(agentId) % palettes.length];
 }
+
+/** Lucide silhouettes: angular `User` vs round `UserRound`; circle variant when gender is unknown. */
+function AgentGenderAvatarIcon({
+  gender,
+  size,
+  className,
+}: {
+  gender?: string | null;
+  size: number;
+  className?: string;
+}) {
+  const g = String(gender ?? "")
+    .trim()
+    .toLowerCase();
+  let Icon = CircleUserRound;
+  if (g) {
+    const female =
+      /^(f|female|woman|girl)(\/|\s|,|$)|\bfemale\b|\bwoman\b|\bgirl\b/.test(g) ||
+      /^she\b/.test(g);
+    const male =
+      /^(m|male|man|boy)(\/|\s|,|$)|\bmale\b|\bman\b|\bboy\b/.test(g) || /^he\b/.test(g);
+    if (female && !male) Icon = UserRound;
+    else if (male && !female) Icon = User;
+    else if (female) Icon = UserRound;
+    else if (male) Icon = User;
+  }
+  return (
+    <Icon
+      className={cn("shrink-0 drop-shadow-sm", className)}
+      size={size}
+      strokeWidth={2.25}
+      aria-hidden
+    />
+  );
+}
+
+/** Readable handle for feed headers (avoids bare numeric @489). */
+function agentDisplayHandle(agentId: number, agentName: string): string {
+  const slug = agentName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 24);
+  if (slug.length >= 2) return `@${slug}`;
+  return `@agent_${agentId}`;
+}
+
+function AgentDemographicChips({
+  agentAge,
+  agentGender,
+  agentRegion,
+  agentOccupation,
+  ariaLabel = "Agent demographics",
+  variant = "chips",
+}: {
+  agentAge?: number | null;
+  agentGender?: string | null;
+  agentRegion?: string | null;
+  agentOccupation?: string | null;
+  ariaLabel?: string;
+  variant?: "chips" | "inline";
+}) {
+  const hasAny =
+    agentAge != null ||
+    !!(agentGender && String(agentGender).trim()) ||
+    !!(agentRegion && String(agentRegion).trim()) ||
+    !!(agentOccupation && String(agentOccupation).trim());
+  if (!hasAny) {
+    return null;
+  }
+  if (variant === "inline") {
+    const parts: string[] = [];
+    if (agentAge != null) parts.push(String(agentAge));
+    if (agentGender && String(agentGender).trim()) parts.push(String(agentGender).trim());
+    if (agentRegion && String(agentRegion).trim()) parts.push(String(agentRegion).trim());
+    if (agentOccupation && String(agentOccupation).trim()) parts.push(String(agentOccupation).trim());
+    return (
+      <p
+        className="m-0 max-w-full truncate text-[10px] leading-snug text-muted-foreground/75"
+        title={parts.join(" · ")}
+        aria-label={ariaLabel}
+      >
+        {parts.join(" · ")}
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap gap-2" role="list" aria-label={ariaLabel}>
+      {agentAge != null ? (
+        <span
+          role="listitem"
+          aria-label={`Age ${agentAge}`}
+          title={`Age ${agentAge}`}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-border/40 bg-muted/25 px-2.5 py-1 text-[11px] font-medium text-foreground/85 shadow-sm backdrop-blur-sm ring-1 ring-black/[0.02] dark:bg-muted/20 dark:ring-white/[0.04]"
+        >
+          <CalendarDays
+            className="h-3.5 w-3.5 shrink-0 text-muted-foreground/75"
+            strokeWidth={2}
+            aria-hidden
+          />
+          <span className="tabular-nums font-semibold text-foreground/95">{agentAge}</span>
+        </span>
+      ) : null}
+      {agentGender ? (
+        <span
+          role="listitem"
+          aria-label={`Gender ${agentGender}`}
+          title={`Gender ${agentGender}`}
+          className="inline-flex max-w-[min(100%,14rem)] items-center gap-1.5 rounded-full border border-border/40 bg-muted/25 px-2.5 py-1 text-[11px] font-medium text-foreground/85 shadow-sm backdrop-blur-sm ring-1 ring-black/[0.02] dark:bg-muted/20 dark:ring-white/[0.04]"
+        >
+          <UserRound
+            className="h-3.5 w-3.5 shrink-0 text-muted-foreground/75"
+            strokeWidth={2}
+            aria-hidden
+          />
+          <span className="truncate capitalize font-semibold text-foreground/95">{agentGender}</span>
+        </span>
+      ) : null}
+      {agentRegion ? (
+        <span
+          role="listitem"
+          aria-label={`Region ${agentRegion}`}
+          title={`Region ${agentRegion}`}
+          className="inline-flex max-w-[min(100%,16rem)] items-center gap-1.5 rounded-full border border-border/40 bg-muted/25 px-2.5 py-1 text-[11px] font-medium text-foreground/85 shadow-sm backdrop-blur-sm ring-1 ring-black/[0.02] dark:bg-muted/20 dark:ring-white/[0.04]"
+        >
+          <MapPin
+            className="h-3.5 w-3.5 shrink-0 text-muted-foreground/75"
+            strokeWidth={2}
+            aria-hidden
+          />
+          <span className="truncate font-semibold text-foreground/95">{agentRegion}</span>
+        </span>
+      ) : null}
+      {agentOccupation ? (
+        <span
+          role="listitem"
+          aria-label={`Occupation ${agentOccupation}`}
+          title={`Occupation ${agentOccupation}`}
+          className="inline-flex max-w-[min(100%,20rem)] items-center gap-1.5 rounded-full border border-border/40 bg-muted/25 px-2.5 py-1 text-[11px] font-medium text-foreground/85 shadow-sm backdrop-blur-sm ring-1 ring-black/[0.02] dark:bg-muted/20 dark:ring-white/[0.04]"
+        >
+          <Briefcase
+            className="h-3.5 w-3.5 shrink-0 text-muted-foreground/75"
+            strokeWidth={2}
+            aria-hidden
+          />
+          <span className="truncate font-semibold text-foreground/95">{agentOccupation}</span>
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -812,28 +973,30 @@ export default function SimulationDetail() {
         </TabsContent>
 
         <TabsContent value="overview" className="mt-0 space-y-6">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="bg-card border border-border p-4 rounded-xl shadow-sm">
-              <div className="text-xs text-muted-foreground mb-1">Total Agents Active</div>
-              <div className="text-2xl font-mono font-semibold">{sim.totalAgents}</div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 sm:gap-4">
+            <div className="relative overflow-hidden rounded-2xl border border-border/50 bg-gradient-to-br from-card via-card to-muted/15 p-4 shadow-sm ring-1 ring-black/[0.02] dark:ring-white/[0.04]">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Total agents</div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-foreground">{sim.totalAgents}</div>
             </div>
-            <div className="bg-card border border-border p-4 rounded-xl shadow-sm">
-              <div className="text-xs text-muted-foreground mb-1">Posts Generated</div>
-              <div className="text-2xl font-mono font-semibold">{sim.totalPosts}</div>
+            <div className="relative overflow-hidden rounded-2xl border border-border/50 bg-gradient-to-br from-card via-card to-muted/15 p-4 shadow-sm ring-1 ring-black/[0.02] dark:ring-white/[0.04]">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">Posts</div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-foreground">{sim.totalPosts}</div>
             </div>
-            <div className="bg-card border border-border p-4 rounded-xl shadow-sm">
-              <div className="text-xs text-muted-foreground flex items-center justify-between mb-1">
-                Learning Rate
-                <span className="text-[10px] bg-primary/20 text-primary px-1.5 py-0.5 rounded">α</span>
+            <div className="relative overflow-hidden rounded-2xl border border-border/50 bg-gradient-to-br from-card via-card to-primary/[0.06] p-4 shadow-sm ring-1 ring-primary/10 dark:from-card dark:via-card dark:to-primary/[0.08]">
+              <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Learning rate
+                <span className="rounded-md bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-primary">
+                  α
+                </span>
               </div>
-              <div className="text-2xl font-mono font-semibold text-accent">{sim.config.learningRate}</div>
+              <div className="mt-1 text-2xl font-semibold tabular-nums tracking-tight text-primary">{sim.config.learningRate}</div>
             </div>
           </div>
 
-          <div className="w-full rounded-2xl border border-border/80 bg-card shadow-sm ring-1 ring-black/[0.04] dark:ring-white/[0.06]">
-            <div className="sticky top-0 z-[1] flex flex-wrap items-center justify-between gap-2 border-b border-border/60 bg-card/95 px-3 py-2.5 backdrop-blur-md sm:px-4">
-              <div className="flex min-w-0 items-center gap-2">
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+          <div className="w-full overflow-hidden rounded-2xl border border-border/50 bg-card/60 shadow-lg shadow-black/[0.04] ring-1 ring-black/[0.03] backdrop-blur-sm dark:bg-card/40 dark:shadow-black/30 dark:ring-white/[0.06]">
+            <div className="sticky top-0 z-[1] flex flex-wrap items-center justify-between gap-3 border-b border-border/40 bg-gradient-to-b from-card/98 to-card/90 px-4 py-3 backdrop-blur-xl sm:px-5 dark:from-card/95 dark:to-card/85">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary/20 to-primary/5 text-primary shadow-inner ring-1 ring-primary/15">
                   <MessageSquare className="h-4 w-4" strokeWidth={2} />
                 </div>
                 <div className="min-w-0 leading-tight">
@@ -841,178 +1004,339 @@ export default function SimulationDetail() {
                   <p className="text-[11px] text-muted-foreground">Posts and replies across rounds</p>
                 </div>
               </div>
-              <div className="flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
-                <span className="rounded-full bg-muted/70 px-2 py-0.5 font-medium tabular-nums">
+              <div className="flex shrink-0 items-center gap-2">
+                <span className="rounded-full border border-border/50 bg-muted/40 px-2.5 py-1 text-[11px] font-medium tabular-nums text-foreground/90 backdrop-blur-sm">
                   {posts.length} thread{posts.length === 1 ? "" : "s"}
                 </span>
-                <span className="hidden sm:inline">·</span>
-                <span className="tabular-nums">R{sim.currentRound}</span>
+                <span className="rounded-full bg-foreground/[0.06] px-2.5 py-1 text-[11px] font-semibold tabular-nums text-foreground dark:bg-white/10">
+                  R{sim.currentRound}
+                </span>
               </div>
             </div>
 
-            <div className="w-full px-2 py-2 sm:px-3 sm:py-3">
+            <div className="w-full bg-gradient-to-b from-muted/[0.12] via-transparent to-transparent px-3 py-3 sm:px-5 sm:py-4 dark:from-muted/10">
               {posts.length === 0 ? (
-                <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border/70 bg-muted/10 py-14 text-muted-foreground">
-                  <MessageSquare className="mb-2 h-9 w-9 opacity-40" />
-                  <p className="text-xs font-medium text-foreground/80">No posts yet</p>
-                  <p className="mt-0.5 text-center text-[11px]">Run a round to populate the feed.</p>
+                <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/60 bg-muted/5 py-16 text-muted-foreground">
+                  <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-2xl bg-muted/30 ring-1 ring-border/40">
+                    <MessageSquare className="h-6 w-6 opacity-50" strokeWidth={1.75} />
+                  </div>
+                  <p className="text-sm font-medium text-foreground">No posts yet</p>
+                  <p className="mt-1 max-w-[240px] text-center text-xs leading-relaxed text-muted-foreground">
+                    Run a round to populate the feed.
+                  </p>
                 </div>
               ) : (
-                <div className="flex w-full flex-col gap-2">
+                <div className="flex w-full flex-col gap-3">
                   {posts.map((post) => {
                     const replies = commentsByPostId.get(post.id) ?? [];
                     const feedTime = shortFeedTime(post.createdAt);
                     const sentimentLabel =
                       post.sentiment > 0.15 ? "positive" : post.sentiment < -0.15 ? "negative" : "neutral";
+                    const SentimentIcon =
+                      sentimentLabel === "positive"
+                        ? TrendingUp
+                        : sentimentLabel === "negative"
+                          ? TrendingDown
+                          : Minus;
                     return (
                       <article
                         key={post.id}
-                        className="group w-full rounded-xl border border-border/70 bg-card transition-colors hover:border-border/90"
+                        className="group relative overflow-hidden rounded-2xl border border-border/50 bg-card/80 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_-12px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.03] backdrop-blur-[2px] transition-[box-shadow,border-color,transform] duration-300 hover:border-border hover:shadow-[0_4px_6px_rgba(0,0,0,0.03),0_20px_40px_-16px_rgba(0,0,0,0.12)] dark:bg-card/45 dark:shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_12px_40px_-20px_rgba(0,0,0,0.5)] dark:ring-white/[0.06] dark:hover:border-white/[0.1]"
                       >
-                        <div className="flex gap-2.5 p-3 sm:gap-3 sm:p-3.5">
+                        <div
+                          className={cn(
+                            "pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-foreground/12 to-transparent opacity-90 dark:via-white/15",
+                          )}
+                          aria-hidden
+                        />
+                        <div
+                          className={cn(
+                            "pointer-events-none absolute left-0 top-0 h-full w-[3px] opacity-90 transition-opacity group-hover:opacity-100",
+                            sentimentLabel === "positive" && "bg-gradient-to-b from-emerald-400 via-emerald-500/80 to-emerald-600/25",
+                            sentimentLabel === "negative" && "bg-gradient-to-b from-rose-400 via-rose-500/75 to-destructive/20",
+                            sentimentLabel === "neutral" && "bg-gradient-to-b from-muted-foreground/40 via-muted-foreground/25 to-transparent",
+                          )}
+                          aria-hidden
+                        />
+                        <div className="flex gap-3 p-3.5 pl-[calc(0.875rem+3px)] sm:gap-3.5 sm:p-4 sm:pl-[calc(1rem+3px)]">
                           <div
                             className={cn(
-                              "mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[11px] font-bold ring-2 ring-background",
+                              "mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-[12px] font-bold tracking-tight text-white shadow-sm ring-2 ring-background/80",
                               avatarGradientClass(post.agentId),
                             )}
                             aria-hidden
                           >
-                            {initialsFromName(post.agentName)}
+                            <AgentGenderAvatarIcon gender={post.agentGender} size={20} />
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[13px]">
-                              <span className="font-semibold text-foreground">{post.agentName}</span>
-                              <span className="text-muted-foreground">@{post.agentId}</span>
-                              {feedTime ? (
-                                <>
-                                  <span className="text-muted-foreground" aria-hidden>
+                            <header className="flex flex-col gap-2 border-b border-border/10 pb-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                              <div className="min-w-0 flex-1 space-y-0.5">
+                                <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                                  <span className="truncate text-[13px] font-semibold leading-none tracking-tight text-foreground">
+                                    {post.agentName}
+                                  </span>
+                                  <span className="shrink-0 font-mono text-[10px] leading-none text-muted-foreground/85">
+                                    {agentDisplayHandle(post.agentId, post.agentName)}
+                                  </span>
+                                  <span className="hidden h-2.5 w-px shrink-0 self-center bg-border/50 sm:block" aria-hidden />
+                                  <div className="flex flex-wrap items-center gap-1">
+                                    {feedTime ? (
+                                      <span className="inline-flex items-center gap-0.5 rounded-full border border-border/30 bg-muted/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-muted-foreground dark:bg-muted/12">
+                                        <Clock
+                                          className="h-2.5 w-2.5 shrink-0 opacity-75"
+                                          strokeWidth={2}
+                                          aria-hidden
+                                        />
+                                        <time dateTime={post.createdAt}>{feedTime}</time>
+                                      </span>
+                                    ) : null}
+                                    <span className="inline-flex items-center gap-0.5 rounded-full border border-border/30 bg-muted/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-muted-foreground dark:bg-muted/12">
+                                      <Orbit
+                                        className="h-2.5 w-2.5 shrink-0 opacity-75"
+                                        strokeWidth={2}
+                                        aria-hidden
+                                      />
+                                      R{post.round}
+                                    </span>
+                                    <span className="inline-flex items-center gap-0.5 rounded-full border border-primary/15 bg-primary/[0.05] px-1.5 py-0.5 text-[9px] font-semibold text-primary dark:bg-primary/[0.08]">
+                                      <Bot className="h-2.5 w-2.5 shrink-0 opacity-90" strokeWidth={2} aria-hidden />
+                                      Simulated
+                                    </span>
+                                  </div>
+                                </div>
+                                <AgentDemographicChips
+                                  variant="inline"
+                                  agentAge={post.agentAge}
+                                  agentGender={post.agentGender}
+                                  agentRegion={post.agentRegion}
+                                  agentOccupation={post.agentOccupation}
+                                />
+                              </div>
+                              <div className="flex shrink-0 flex-wrap items-center gap-1.5 sm:justify-end">
+                                {post.platform && post.platform !== "simulation" ? (
+                                  <span className="inline-flex items-center gap-0.5 rounded-full border border-primary/18 bg-primary/[0.06] px-2 py-0.5 text-[9px] font-semibold capitalize tracking-wide text-primary dark:bg-primary/[0.1]">
+                                    <Radio className="h-2.5 w-2.5 shrink-0 opacity-90" strokeWidth={2.25} aria-hidden />
+                                    {post.platform}
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-0.5 rounded-full border border-border/35 bg-muted/25 px-2 py-0.5 text-[9px] font-semibold text-muted-foreground dark:bg-muted/15">
+                                    <Rss className="h-2.5 w-2.5 shrink-0 opacity-85" strokeWidth={2.25} aria-hidden />
+                                    Feed
+                                  </span>
+                                )}
+                                <span
+                                  className={cn(
+                                    "inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] shadow-sm",
+                                    sentimentLabel === "positive" &&
+                                      "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-900 dark:text-emerald-200",
+                                    sentimentLabel === "negative" &&
+                                      "border-destructive/25 bg-destructive/[0.08] text-destructive",
+                                    sentimentLabel === "neutral" &&
+                                      "border-border/35 bg-muted/20 text-muted-foreground dark:bg-muted/12",
+                                  )}
+                                  title={
+                                    sentimentLabel === "positive"
+                                      ? `Leans positive (${formatScore(post.sentiment)})`
+                                      : sentimentLabel === "negative"
+                                        ? `Leans negative (${formatScore(post.sentiment)})`
+                                        : `Neutral tone (${formatScore(post.sentiment)})`
+                                  }
+                                  aria-label={
+                                    sentimentLabel === "positive"
+                                      ? `Sentiment: leans positive, score ${formatScore(post.sentiment)}`
+                                      : sentimentLabel === "negative"
+                                        ? `Sentiment: leans negative, score ${formatScore(post.sentiment)}`
+                                        : `Sentiment: neutral tone, score ${formatScore(post.sentiment)}`
+                                  }
+                                >
+                                  <SentimentIcon className="h-3 w-3 shrink-0 opacity-90" strokeWidth={2.5} aria-hidden />
+                                  <span className="font-semibold tabular-nums">
+                                    {sentimentLabel === "positive"
+                                      ? "Positive"
+                                      : sentimentLabel === "negative"
+                                        ? "Negative"
+                                        : "Neutral"}
+                                  </span>
+                                  <span className="text-current/40" aria-hidden>
                                     ·
                                   </span>
-                                  <span className="text-xs text-muted-foreground">{feedTime}</span>
-                                </>
-                              ) : null}
-                              <span className="text-muted-foreground" aria-hidden>
-                                ·
-                              </span>
-                              <span className="rounded bg-muted/80 px-1 py-px text-[10px] font-medium text-foreground/90">
-                                R{post.round}
-                              </span>
-                              {post.platform && post.platform !== "simulation" ? (
-                                <span className="rounded bg-primary/10 px-1 py-px text-[10px] font-medium text-primary">
-                                  {post.platform}
+                                  <span className="font-mono text-[10px] font-medium tabular-nums text-current/80">
+                                    {formatScore(post.sentiment)}
+                                  </span>
                                 </span>
-                              ) : null}
-                              {replies.length > 0 ? (
-                                <span className="ml-auto inline-flex items-center gap-0.5 text-[11px] font-medium text-primary">
-                                  <MessageCircle className="h-3.5 w-3.5" strokeWidth={2} />
-                                  {replies.length}
-                                </span>
-                              ) : null}
+                              </div>
+                            </header>
+
+                            <div className="max-w-[65ch] pt-2">
+                              <p className="text-[14px] leading-relaxed text-foreground/95 whitespace-pre-wrap [text-wrap:pretty] sm:text-[15px] sm:leading-[1.6]">
+                                {post.content}
+                              </p>
                             </div>
 
-                            <p className="mt-1.5 text-[13px] leading-snug text-foreground whitespace-pre-wrap sm:text-sm">
-                              {post.content}
-                            </p>
-
                             {post.topicTags && post.topicTags.length > 0 ? (
-                              <div className="mt-1.5 flex flex-wrap gap-1">
+                              <div className="mt-4 flex flex-wrap gap-2">
                                 {post.topicTags.map((tag) => (
                                   <span
                                     key={tag}
-                                    className="rounded-full bg-primary/10 px-1.5 py-px text-[10px] font-medium text-primary"
+                                    className="inline-flex items-center gap-1 rounded-md bg-muted/50 px-2.5 py-1 text-[11px] font-medium text-foreground/90 ring-1 ring-border/40 dark:bg-muted/25"
                                   >
-                                    #{tag}
+                                    <Hash className="h-3 w-3 shrink-0 text-muted-foreground/55" strokeWidth={2} aria-hidden />
+                                    {tag}
                                   </span>
                                 ))}
                               </div>
                             ) : null}
 
-                            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                              <span
-                                className={cn(
-                                  "inline-flex rounded-full border px-1.5 py-px text-[10px] font-medium",
-                                  sentimentLabel === "positive" &&
-                                    "border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-                                  sentimentLabel === "negative" &&
-                                    "border-destructive/30 bg-destructive/10 text-destructive",
-                                  sentimentLabel === "neutral" &&
-                                    "border-border bg-muted/50 text-muted-foreground",
-                                )}
-                              >
-                                {formatScore(post.sentiment)}
-                              </span>
-                            </div>
-
-                            {/* Replies directly under post so they stay in view */}
                             {replies.length > 0 ? (
-                              <div
-                                className="mt-2.5 border-l-2 border-primary/35 pl-3"
-                                role="list"
-                                aria-label={`${replies.length} repl${replies.length === 1 ? "y" : "ies"}`}
+                              <section
+                                className="relative mt-5 overflow-hidden rounded-2xl border border-border/40 bg-gradient-to-b from-card/90 via-card/50 to-muted/[0.08] shadow-[0_1px_0_rgba(0,0,0,0.04)_inset,0_8px_28px_-12px_rgba(0,0,0,0.08)] ring-1 ring-black/[0.04] backdrop-blur-[2px] dark:from-card/40 dark:via-card/25 dark:to-muted/10 dark:shadow-[0_1px_0_rgba(255,255,255,0.04)_inset,0_12px_40px_-18px_rgba(0,0,0,0.45)] dark:ring-white/[0.06]"
+                                aria-labelledby={`thread-replies-heading-${post.id}`}
                               >
-                                <div className="mb-1.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                  <CornerDownRight className="h-3 w-3" />
-                                  Replies
+                                <div className="flex items-center gap-3 border-b border-border/30 bg-gradient-to-r from-muted/[0.14] via-muted/[0.06] to-transparent px-3 py-3.5 sm:px-4 dark:from-muted/12 dark:via-muted/5 dark:to-transparent">
+                                  <div
+                                    className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/[0.11] text-primary shadow-[0_1px_2px_rgba(0,0,0,0.04)] ring-1 ring-primary/20 dark:bg-primary/[0.16] dark:ring-primary/30"
+                                    aria-hidden
+                                  >
+                                    <MessagesSquare className="h-[19px] w-[19px]" strokeWidth={2} />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <h4
+                                      id={`thread-replies-heading-${post.id}`}
+                                      className="text-[13px] font-semibold tracking-tight text-foreground sm:text-sm"
+                                    >
+                                      {replies.length} {replies.length === 1 ? "reply" : "replies"}{" "}
+                                      <span className="font-normal text-muted-foreground">in this thread</span>
+                                    </h4>
+                                    <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                                      Simulated responses to this post
+                                    </p>
+                                  </div>
+                                  <span className="hidden shrink-0 items-center gap-1.5 rounded-full border border-border/45 bg-background/80 px-3 py-1.5 text-[11px] font-semibold tabular-nums text-foreground shadow-sm ring-1 ring-black/[0.03] sm:inline-flex dark:bg-background/35 dark:ring-white/[0.05]">
+                                    <Reply className="h-3.5 w-3.5 text-muted-foreground" strokeWidth={2} aria-hidden />
+                                    {replies.length}
+                                  </span>
                                 </div>
-                                <ul className="space-y-2">
-                                  {replies.map((reply) => (
-                                    <li key={reply.id} className="flex gap-2" role="listitem">
-                                      <div
-                                        className={cn(
-                                          "mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[9px] font-bold ring-1 ring-border",
-                                          avatarGradientClass(reply.agentId),
-                                        )}
-                                        aria-hidden
-                                      >
-                                        {initialsFromName(reply.agentName)}
-                                      </div>
-                                      <div className="min-w-0 flex-1 rounded-lg bg-muted/40 px-2 py-1.5 ring-1 ring-border/50">
-                                        <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0 text-[11px]">
-                                          <span className="font-semibold text-foreground">{reply.agentName}</span>
-                                          <span className="text-muted-foreground">@{reply.agentId}</span>
-                                          <span className="text-muted-foreground">· r{reply.round}</span>
-                                          <span
-                                            className={cn(
-                                              "font-mono text-[10px]",
-                                              reply.sentiment > 0.15
-                                                ? "text-emerald-600 dark:text-emerald-400"
-                                                : reply.sentiment < -0.15
-                                                  ? "text-destructive"
-                                                  : "text-muted-foreground",
-                                            )}
-                                          >
-                                            {formatScore(reply.sentiment)}
-                                          </span>
+                                <ul className="m-0 list-none flex flex-col gap-2 p-2.5 sm:gap-2.5 sm:p-3">
+                                  {replies.map((reply) => {
+                                    const replyMood =
+                                      reply.sentiment > 0.15
+                                        ? "positive"
+                                        : reply.sentiment < -0.15
+                                          ? "negative"
+                                          : "neutral";
+                                    const ReplyMoodIcon =
+                                      replyMood === "positive"
+                                        ? TrendingUp
+                                        : replyMood === "negative"
+                                          ? TrendingDown
+                                          : Minus;
+                                    return (
+                                      <li key={reply.id}>
+                                        <div className="group/reply flex gap-2.5 rounded-xl border border-border/30 bg-background/[0.45] p-2.5 shadow-sm ring-1 ring-black/[0.02] transition-[border-color,box-shadow,background-color] duration-200 hover:border-border/50 hover:bg-background/75 hover:shadow-md dark:bg-background/15 dark:ring-white/[0.04] dark:hover:border-white/[0.1] dark:hover:bg-background/30 sm:gap-3 sm:p-3">
+                                          <div className="relative shrink-0">
+                                            <div
+                                              className={cn(
+                                                "flex h-9 w-9 items-center justify-center rounded-xl text-[10px] font-bold tracking-tight text-white shadow-sm ring-2 ring-background/90",
+                                                avatarGradientClass(reply.agentId),
+                                              )}
+                                              aria-hidden
+                                            >
+                                              <AgentGenderAvatarIcon gender={reply.agentGender} size={18} />
+                                            </div>
+                                            <span
+                                              className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-md border border-border/40 bg-card text-primary shadow-sm ring-2 ring-background dark:bg-card/95"
+                                              title="Reply"
+                                            >
+                                              <Reply className="h-2.5 w-2.5" strokeWidth={2.5} aria-hidden />
+                                            </span>
+                                          </div>
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex min-w-0 flex-col gap-0.5">
+                                              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+                                                <span className="truncate text-[13px] font-semibold leading-tight tracking-tight text-foreground">
+                                                  {reply.agentName}
+                                                </span>
+                                                <span className="shrink-0 font-mono text-[10px] text-muted-foreground/90">
+                                                  {agentDisplayHandle(reply.agentId, reply.agentName)}
+                                                </span>
+                                                <span
+                                                  className="hidden h-3 w-px shrink-0 bg-border/60 sm:block"
+                                                  aria-hidden
+                                                />
+                                                <div className="flex shrink-0 flex-wrap items-center gap-1">
+                                                  <span className="inline-flex items-center gap-0.5 rounded-md border border-border/35 bg-muted/25 px-1.5 py-px text-[10px] font-semibold tabular-nums text-muted-foreground dark:bg-muted/15">
+                                                    <Orbit
+                                                      className="h-2.5 w-2.5 shrink-0 opacity-80"
+                                                      strokeWidth={2}
+                                                      aria-hidden
+                                                    />
+                                                    R{reply.round}
+                                                  </span>
+                                                  <span
+                                                    className={cn(
+                                                      "inline-flex items-center gap-0.5 rounded-md border px-1.5 py-px text-[10px] font-semibold tabular-nums",
+                                                      replyMood === "positive" &&
+                                                        "border-emerald-500/20 bg-emerald-500/[0.08] text-emerald-800 dark:text-emerald-300",
+                                                      replyMood === "negative" &&
+                                                        "border-destructive/20 bg-destructive/[0.08] text-destructive",
+                                                      replyMood === "neutral" &&
+                                                        "border-border/40 bg-muted/25 text-muted-foreground dark:bg-muted/15",
+                                                    )}
+                                                  >
+                                                    <ReplyMoodIcon
+                                                      className="h-2.5 w-2.5 shrink-0 opacity-90"
+                                                      strokeWidth={2.5}
+                                                      aria-hidden
+                                                    />
+                                                    {formatScore(reply.sentiment)}
+                                                  </span>
+                                                </div>
+                                              </div>
+                                              <AgentDemographicChips
+                                                variant="inline"
+                                                agentAge={reply.agentAge}
+                                                agentGender={reply.agentGender}
+                                                agentRegion={reply.agentRegion}
+                                                agentOccupation={reply.agentOccupation}
+                                                ariaLabel="Reply author demographics"
+                                              />
+                                            </div>
+                                            <p className="mt-2 text-[13px] leading-snug text-foreground/95 whitespace-pre-wrap [text-wrap:pretty] sm:text-[13.5px] sm:leading-relaxed">
+                                              {reply.content}
+                                            </p>
+                                          </div>
                                         </div>
-                                        <p className="mt-0.5 text-[12px] leading-snug text-foreground whitespace-pre-wrap">
-                                          {reply.content}
-                                        </p>
-                                      </div>
-                                    </li>
-                                  ))}
+                                      </li>
+                                    );
+                                  })}
                                 </ul>
-                              </div>
+                              </section>
                             ) : null}
 
-                            <div
-                              className="mt-2 flex items-center gap-3 border-t border-border/40 pt-2 text-[11px] text-muted-foreground"
+                            <footer
+                              className="mt-4 flex items-center justify-between border-t border-border/35 pt-3 text-muted-foreground"
                               role="group"
                               aria-label="Post actions"
                             >
-                              <span className="inline-flex items-center gap-1 font-medium text-foreground/70">
-                                <MessageCircle className="h-3.5 w-3.5" strokeWidth={2} />
-                                {replies.length}
+                              <span
+                                className="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] font-medium text-foreground/75"
+                                title="Replies in this simulation thread"
+                              >
+                                <MessageCircle className="h-[18px] w-[18px] opacity-70" strokeWidth={1.75} />
+                                <span className="tabular-nums">{replies.length}</span>
                               </span>
-                              <span className="inline-flex opacity-35">
-                                <Repeat2 className="h-3.5 w-3.5" strokeWidth={2} />
+                              <span className="inline-flex items-center gap-0.5 opacity-50">
+                                <span className="inline-flex rounded-full p-2" title="Not available in simulation">
+                                  <Repeat2 className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                                </span>
+                                <span className="inline-flex rounded-full p-2" title="Not available in simulation">
+                                  <Heart className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                                </span>
+                                <span className="inline-flex rounded-full p-2" title="Not available in simulation">
+                                  <Share2 className="h-[18px] w-[18px]" strokeWidth={1.75} />
+                                </span>
                               </span>
-                              <span className="inline-flex opacity-35">
-                                <Heart className="h-3.5 w-3.5" strokeWidth={2} />
-                              </span>
-                              <span className="inline-flex opacity-35">
-                                <Share2 className="h-3.5 w-3.5" strokeWidth={2} />
-                              </span>
-                            </div>
+                            </footer>
                           </div>
                         </div>
                       </article>

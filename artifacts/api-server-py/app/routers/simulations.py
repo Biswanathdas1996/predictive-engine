@@ -699,11 +699,19 @@ async def get_simulation_posts(
             "SELECT count(*)::int FROM posts WHERE simulation_id = $1", id
         )
         agents = await conn.fetch(
-            "SELECT id, name FROM agents WHERE simulation_id = $1", id
+            "SELECT id, name, age, gender, region, occupation FROM agents WHERE simulation_id = $1",
+            id,
         )
-    amap = {a["id"]: a["name"] for a in agents}
+    by_id = {a["id"]: a for a in agents}
     return {
-        "items": [post_row(pr, agent_name=amap.get(pr["agent_id"], "Unknown")) for pr in posts],
+        "items": [
+            post_row(
+                pr,
+                agent_name=(rec["name"] if (rec := by_id.get(pr["agent_id"])) else "Unknown"),
+                agent=rec if rec else None,
+            )
+            for pr in posts
+        ],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -753,6 +761,7 @@ async def get_simulation_graph(id: int) -> dict:
             )
             comments = []
         amap = {a["id"]: a["name"] for a in agents}
+        agents_by_id = {a["id"]: a for a in agents}
 
     nodes: list[dict] = []
     for a in agents:
@@ -809,10 +818,20 @@ async def get_simulation_graph(id: int) -> dict:
     ]
 
     posts_out = [
-        post_row(pr, agent_name=amap.get(pr["agent_id"], "Unknown")) for pr in posts
+        post_row(
+            pr,
+            agent_name=(rec["name"] if (rec := agents_by_id.get(pr["agent_id"])) else "Unknown"),
+            agent=rec if rec else None,
+        )
+        for pr in posts
     ]
     comments_out = [
-        comment_row(c, agent_name=amap.get(c["agent_id"], "Unknown")) for c in comments
+        comment_row(
+            c,
+            agent_name=amap.get(c["agent_id"], "Unknown"),
+            agent=agents_by_id.get(c["agent_id"]),
+        )
+        for c in comments
     ]
 
     return {

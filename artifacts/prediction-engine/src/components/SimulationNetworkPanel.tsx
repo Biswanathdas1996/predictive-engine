@@ -48,6 +48,7 @@ import {
   ZoomOut,
   Crosshair,
   MessageSquare,
+  User,
 } from "lucide-react";
 import { formatScore } from "@/lib/utils";
 
@@ -77,12 +78,7 @@ const AgentNode = memo(function AgentNode({ data, selected }: NodeProps) {
   const cfg = stanceConfig[d.stance] ?? stanceConfig.neutral;
   const streamOn = Boolean(d.streamHighlighted);
   const size = 44;
-  const initials = d.label
-    .split(/\s+/)
-    .map((w) => w[0])
-    .join("")
-    .toUpperCase()
-    .slice(0, 2);
+  const iconSize = Math.round(size * 0.5);
 
   return (
     <div className={`graph-node-outer${streamOn ? " graph-node-stream-active" : ""}`}>
@@ -105,17 +101,12 @@ const AgentNode = memo(function AgentNode({ data, selected }: NodeProps) {
         }}
       >
         <div className="graph-node-glow" style={{ background: cfg.glow }} />
-        <span
-          style={{
-            fontSize: 13,
-            fontWeight: 700,
-            color: "#fff",
-            textShadow: "0 1px 2px rgba(0,0,0,0.3)",
-            letterSpacing: "0.03em",
-          }}
-        >
-          {initials}
-        </span>
+        <User
+          size={iconSize}
+          strokeWidth={2.5}
+          className="graph-node-user-icon"
+          aria-hidden
+        />
       </div>
 
       <span className="graph-node-label" title={d.label}>

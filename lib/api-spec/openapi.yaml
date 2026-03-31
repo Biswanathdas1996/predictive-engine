@@ -984,6 +984,15 @@ components:
           type: integer
         agentName:
           type: string
+        agentAge:
+          type: integer
+          description: Persona age (from agent record); omitted when unknown.
+        agentGender:
+          type: string
+        agentRegion:
+          type: string
+        agentOccupation:
+          type: string
         simulationId:
           type: integer
         createdAt:
@@ -1023,6 +1032,15 @@ components:
           type: string
           format: date-time
           nullable: true
+        agentAge:
+          type: integer
+          description: Persona age from agent record
+        agentGender:
+          type: string
+        agentRegion:
+          type: string
+        agentOccupation:
+          type: string
       required:
         - id
         - content

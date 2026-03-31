@@ -231,6 +231,36 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     return False
 
 
+def _is_transient_http_status(code: int) -> bool:
+    """Gateway / upstream blips (Envoy 503, overload) — safe to retry with backoff."""
+    return code in (408, 502, 503, 504)
+
+
+def _is_transient_transport_error(exc: BaseException) -> bool:
+    """Connection drops and timeouts before a complete HTTP response."""
+    return isinstance(
+        exc,
+        (
+            httpx.ConnectError,
+            httpx.ReadTimeout,
+            httpx.WriteTimeout,
+            httpx.ConnectTimeout,
+            httpx.RemoteProtocolError,
+            httpx.PoolTimeout,
+        ),
+    )
+
+
+def _should_retry_after_exception(exc: Exception) -> bool:
+    if _is_rate_limit_error(exc):
+        return True
+    if _is_transient_transport_error(exc):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+        return _is_transient_http_status(exc.response.status_code)
+    return False
+
+
 def _compute_backoff(attempt: int) -> float:
     delay = min(_LLM_RETRY_BASE_DELAY * (2**attempt), _LLM_RETRY_MAX_DELAY)
     jitter = random.uniform(0, delay * 0.3)
@@ -656,7 +686,26 @@ async def _call_pwc_genai_async_inner(
                         continue
 
                     if response.status_code != 200:
-                        raise ValueError(f"PwC GenAI API Error: {response.status_code} - {response.text}")
+                        snippet = (response.text or "")[:300].replace("\n", " ")
+                        if (
+                            _is_transient_http_status(response.status_code)
+                            and retry < _LLM_MAX_RETRIES - 1
+                        ):
+                            backoff = _compute_backoff(retry)
+                            logger.warning(
+                                "Transient HTTP %s task=%s retry %s/%s backoff=%.1fs: %s",
+                                response.status_code,
+                                task_name or "adhoc",
+                                retry + 1,
+                                _LLM_MAX_RETRIES,
+                                backoff,
+                                snippet or "(empty body)",
+                            )
+                            await asyncio.sleep(backoff)
+                            continue
+                        raise ValueError(
+                            f"PwC GenAI API Error: {response.status_code} - {response.text}"
+                        )
 
                     result = response.json()
                     chunk = _extract_text_from_response(result)
@@ -665,13 +714,14 @@ async def _call_pwc_genai_async_inner(
                     success = True
                     break
                 except Exception as e:
-                    if _is_rate_limit_error(e) and retry < _LLM_MAX_RETRIES - 1:
+                    if _should_retry_after_exception(e) and retry < _LLM_MAX_RETRIES - 1:
                         backoff = _compute_backoff(retry)
                         logger.warning(
-                            "Rate limit error task=%s retry %s/%s: %s",
+                            "Retryable GenAI error task=%s attempt %s/%s backoff=%.1fs: %s",
                             task_name or "adhoc",
                             retry + 1,
                             _LLM_MAX_RETRIES,
+                            backoff,
                             e,
                         )
                         await asyncio.sleep(backoff)
@@ -680,7 +730,7 @@ async def _call_pwc_genai_async_inner(
 
             if not success:
                 raise ValueError(
-                    f"Rate limit exceeded after {_LLM_MAX_RETRIES} retries for task={task_name or 'adhoc'}"
+                    f"GenAI request failed after {_LLM_MAX_RETRIES} retries for task={task_name or 'adhoc'}"
                 )
 
             if enable_continuation and result is not None:
@@ -770,6 +820,29 @@ async def call_pwc_genai_stream(
                         )
                         await asyncio.sleep(bk)
                         continue
+                    if response.status_code != 200:
+                        err_body = (await response.aread()).decode(errors="replace")[:400]
+                        await _stream_ctx.__aexit__(None, None, None)
+                        _stream_ctx = None
+                        if (
+                            _is_transient_http_status(response.status_code)
+                            and stream_retry < _LLM_MAX_RETRIES - 1
+                        ):
+                            bk = _compute_backoff(stream_retry)
+                            logger.warning(
+                                "stream transient HTTP %s task=%s retry %s/%s backoff=%.1fs: %s",
+                                response.status_code,
+                                task_name or "adhoc",
+                                stream_retry + 1,
+                                _LLM_MAX_RETRIES,
+                                bk,
+                                err_body.replace("\n", " ") or "(empty body)",
+                            )
+                            await asyncio.sleep(bk)
+                            continue
+                        raise ValueError(
+                            f"PwC GenAI API Error: {response.status_code} - {err_body}"
+                        )
                     break
                 except Exception as conn_exc:
                     if _stream_ctx is not None:
@@ -778,15 +851,19 @@ async def call_pwc_genai_stream(
                         except Exception:
                             pass
                         _stream_ctx = None
-                    if _is_rate_limit_error(conn_exc) and stream_retry < _LLM_MAX_RETRIES - 1:
+                    if _should_retry_after_exception(conn_exc) and stream_retry < _LLM_MAX_RETRIES - 1:
                         bk = _compute_backoff(stream_retry)
-                        logger.warning("stream rate limit: %s", conn_exc)
+                        logger.warning(
+                            "stream retry after %s: %s",
+                            type(conn_exc).__name__,
+                            conn_exc,
+                        )
                         await asyncio.sleep(bk)
                         continue
                     raise
             else:
                 raise ValueError(
-                    f"Rate limit exceeded after {_LLM_MAX_RETRIES} retries for streaming "
+                    f"Streaming GenAI failed after {_LLM_MAX_RETRIES} retries for "
                     f"task={task_name or 'adhoc'}"
                 )
 
@@ -973,7 +1050,26 @@ def _call_pwc_genai_sync_inner(
                         continue
 
                     if response.status_code != 200:
-                        raise ValueError(f"PwC GenAI API Error: {response.status_code} - {response.text}")
+                        snippet = (response.text or "")[:300].replace("\n", " ")
+                        if (
+                            _is_transient_http_status(response.status_code)
+                            and retry < _LLM_MAX_RETRIES - 1
+                        ):
+                            backoff = _compute_backoff(retry)
+                            logger.warning(
+                                "sync transient HTTP %s task=%s retry %s/%s backoff=%.1fs: %s",
+                                response.status_code,
+                                task_name or "adhoc",
+                                retry + 1,
+                                _LLM_MAX_RETRIES,
+                                backoff,
+                                snippet or "(empty body)",
+                            )
+                            time.sleep(backoff)
+                            continue
+                        raise ValueError(
+                            f"PwC GenAI API Error: {response.status_code} - {response.text}"
+                        )
 
                     result = response.json()
                     chunk = _extract_text_from_response(result)
@@ -982,15 +1078,22 @@ def _call_pwc_genai_sync_inner(
                     success = True
                     break
                 except Exception as e:
-                    if _is_rate_limit_error(e) and retry < _LLM_MAX_RETRIES - 1:
+                    if _should_retry_after_exception(e) and retry < _LLM_MAX_RETRIES - 1:
                         backoff = _compute_backoff(retry)
+                        logger.warning(
+                            "sync retryable error task=%s attempt %s/%s: %s",
+                            task_name or "adhoc",
+                            retry + 1,
+                            _LLM_MAX_RETRIES,
+                            e,
+                        )
                         time.sleep(backoff)
                         continue
                     raise
 
             if not success:
                 raise ValueError(
-                    f"Rate limit exceeded after {_LLM_MAX_RETRIES} retries for task={task_name or 'adhoc'}"
+                    f"GenAI request failed after {_LLM_MAX_RETRIES} retries for task={task_name or 'adhoc'}"
                 )
 
             if enable_continuation and result is not None:
@@ -1053,6 +1156,22 @@ async def call_pwc_embedding_async(
                         await asyncio.sleep(bk)
                         continue
                     if response.status_code != 200:
+                        snippet = (response.text or "")[:300].replace("\n", " ")
+                        if (
+                            _is_transient_http_status(response.status_code)
+                            and emb_retry < _LLM_MAX_RETRIES - 1
+                        ):
+                            bk = _compute_backoff(emb_retry)
+                            logger.warning(
+                                "embedding transient HTTP %s retry %s/%s backoff=%.1fs: %s",
+                                response.status_code,
+                                emb_retry + 1,
+                                _LLM_MAX_RETRIES,
+                                bk,
+                                snippet or "(empty body)",
+                            )
+                            await asyncio.sleep(bk)
+                            continue
                         raise ValueError(
                             f"PwC GenAI Embedding API Error: {response.status_code} - {response.text}"
                         )
@@ -1065,12 +1184,12 @@ async def call_pwc_embedding_async(
                     asyncio.create_task(_bg_flush())
                     return embeddings
                 except Exception as emb_exc:
-                    if _is_rate_limit_error(emb_exc) and emb_retry < _LLM_MAX_RETRIES - 1:
+                    if _should_retry_after_exception(emb_exc) and emb_retry < _LLM_MAX_RETRIES - 1:
                         await asyncio.sleep(_compute_backoff(emb_retry))
                         continue
                     raise
             raise ValueError(
-                f"Rate limit exceeded after {_LLM_MAX_RETRIES} retries for embedding "
+                f"Embedding request failed after {_LLM_MAX_RETRIES} retries for "
                 f"task={task_name or 'adhoc'}"
             )
         except Exception as exc:
@@ -1351,6 +1470,37 @@ async def policy_key_points_brief(title: str, summary: str) -> str:
     return raw[:out_max]
 
 
+def _validate_sentiment(content: str, claimed: float) -> float:
+    """Cross-check LLM-reported sentiment against simple keyword heuristics.
+
+    If the content strongly signals a polarity opposite to the claimed sentiment,
+    nudge the value toward the heuristic estimate to prevent belief-propagation
+    pollution from misreported sentiment.
+    """
+    if not content:
+        return claimed
+    lower = content.lower()
+    pos_signals = sum(1 for w in (
+        "great", "love", "excellent", "amazing", "support", "agree",
+        "promising", "benefit", "hope", "progress", "well said",
+        "absolutely", "exactly", "good", "opportunity",
+    ) if w in lower)
+    neg_signals = sum(1 for w in (
+        "terrible", "hate", "awful", "disaster", "oppose", "disagree",
+        "harmful", "dangerous", "fail", "worse", "wrong", "absurd",
+        "ridiculous", "concerned", "worried", "unfortunately",
+    ) if w in lower)
+    if pos_signals == 0 and neg_signals == 0:
+        return claimed
+    heuristic = (pos_signals - neg_signals) / max(pos_signals + neg_signals, 1)
+    # If claimed and heuristic agree in direction, trust claimed
+    if claimed * heuristic >= 0:
+        return claimed
+    # Directional mismatch: blend toward heuristic (70% claimed, 30% heuristic)
+    blended = claimed * 0.7 + heuristic * 0.3
+    return max(-1.0, min(1.0, blended))
+
+
 async def generate_agent_action(prompt: str) -> LLMResponse | None:
     try:
         # Agent action JSON needs ~100 tokens minimum for a 280-char content field;
@@ -1366,6 +1516,9 @@ async def generate_agent_action(prompt: str) -> LLMResponse | None:
             parsed["sentiment"] = max(-1.0, min(1.0, float(sentiment)))
         else:
             parsed["sentiment"] = 0.0
+        # Validate sentiment against content to catch misreporting
+        content = str(parsed.get("content") or "")
+        parsed["sentiment"] = _validate_sentiment(content, parsed["sentiment"])
         action = parsed.get("action", "post")
         if action not in ("post", "comment", "ignore"):
             parsed["action"] = "post"

@@ -14,8 +14,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from typing import Any, Literal, NotRequired, TypedDict, cast
 
 import asyncpg
@@ -26,6 +28,7 @@ from app.serialize import normalize_belief_state_json
 from app.services import llm_service
 from app.services import neo4j_service
 from app.services.prompt_templates import (
+    _agent_conversation_history,
     build_agent_action_prompt,
     build_agent_reaction_prompt,
     build_graph_context_summary,
@@ -67,20 +70,45 @@ def update_belief(
     incoming_signal: float,
     influence_weight: float,
     learning_rate: float = 0.3,
+    source_stance: str = "",
+    agent_stance: str = "",
 ) -> dict[str, Any]:
     bs = agent["beliefState"]
+
+    # Confirmation bias: agents resist influence from outgroup sources.
+    # Same-stance sources have full influence; cross-stance sources are dampened.
+    # High-confidence agents resist change more strongly (entrenchment effect).
+    bias_factor = 1.0
+    if source_stance and agent_stance:
+        same_camp = source_stance == agent_stance
+        allied = (
+            (source_stance in ("supportive", "radical") and agent_stance in ("supportive", "radical"))
+            or (source_stance in ("opposed", "neutral") and agent_stance in ("opposed", "neutral"))
+        )
+        if same_camp:
+            bias_factor = 1.0
+        elif allied:
+            bias_factor = 0.7
+        else:
+            # Outgroup: higher confidence = stronger resistance (backfire-adjacent)
+            bias_factor = max(0.15, 0.4 - agent["confidenceLevel"] * 0.25)
+
+    effective_lr = learning_rate * bias_factor
+
     delta = (
-        learning_rate
+        effective_lr
         * influence_weight
         * (incoming_signal - bs["policySupport"])
     )
     new_policy = clamp(bs["policySupport"] + delta, -1, 1)
-    new_confidence = clamp(agent["confidenceLevel"] + abs(delta) * 0.1, 0, 1)
+    # Confidence grows faster from ingroup agreement, slower from outgroup challenge
+    conf_growth = abs(delta) * (0.12 if bias_factor >= 0.7 else 0.04)
+    new_confidence = clamp(agent["confidenceLevel"] + conf_growth, 0, 1)
     trust_delta = (
-        learning_rate * influence_weight * 0.3 * (0.1 if incoming_signal > 0 else -0.1)
+        effective_lr * influence_weight * 0.3 * (0.1 if incoming_signal > 0 else -0.1)
     )
     new_trust = clamp(bs["trustInGovernment"] + trust_delta, -1, 1)
-    econ_delta = learning_rate * influence_weight * 0.2 * incoming_signal
+    econ_delta = effective_lr * influence_weight * 0.2 * incoming_signal
     new_econ = clamp(bs["economicOutlook"] + econ_delta, -1, 1)
     return {
         "beliefState": {
@@ -264,6 +292,7 @@ async def generate_llm_action(
     target_comment: dict[str, Any] | None = None,
     peer_highlights: list[str] | None = None,
     directive: str | None = None,
+    conversation_history: str | None = None,
 ) -> tuple[Literal["post", "comment", "ignore"], str, float, int | None]:
     graph_summary = build_graph_context_summary(neighbors, recent_posts)
     ctx: dict[str, Any] = {
@@ -286,6 +315,8 @@ async def generate_llm_action(
         ctx["peerHighlights"] = peer_highlights
     if directive:
         ctx["orchestratorDirective"] = directive
+    if conversation_history:
+        ctx["conversationHistory"] = conversation_history
     prompt = build_agent_action_prompt(ctx)
     result = await llm_service.generate_agent_action(prompt)
     if result and result.get("action"):
@@ -345,6 +376,65 @@ async def _reaction_content_and_sentiment(
 # ---------------------------------------------------------------------------
 _ADVISORY_LOCK_NAMESPACE = 839201  # arbitrary constant
 
+# Stale locks: session advisory locks stick to the pooled DB session. A cancelled SSE run or
+# crash can return a connection that still holds the lock while other pool conns see
+# "already running". We clear locks on checkout and retry across pool connections.
+_ROUND_LOCK_SPIN = min(12, max(4, int(os.getenv("SIM_ROUND_LOCK_SPIN", "8"))))
+
+
+@asynccontextmanager
+async def _connection_with_round_lock(simulation_id: int):
+    pl = pool()
+    for attempt in range(_ROUND_LOCK_SPIN):
+        conn = await pl.acquire()
+        try:
+            await conn.execute("SELECT pg_advisory_unlock_all()")
+            got = await conn.fetchval(
+                "SELECT pg_try_advisory_lock($1, $2)",
+                _ADVISORY_LOCK_NAMESPACE,
+                simulation_id,
+            )
+        except BaseException:
+            try:
+                await conn.execute("SELECT pg_advisory_unlock_all()")
+            except Exception:
+                pass
+            await pl.release(conn)
+            raise
+        if not got:
+            try:
+                await conn.execute("SELECT pg_advisory_unlock_all()")
+            except Exception:
+                pass
+            await pl.release(conn)
+            await asyncio.sleep(0.05 + 0.06 * attempt)
+            continue
+        try:
+            yield conn
+        finally:
+            try:
+                await conn.execute(
+                    "SELECT pg_advisory_unlock($1, $2)",
+                    _ADVISORY_LOCK_NAMESPACE,
+                    simulation_id,
+                )
+            except Exception as unlock_exc:
+                logger.warning(
+                    "pg_advisory_unlock failed for simulation %s: %s",
+                    simulation_id,
+                    unlock_exc,
+                )
+            try:
+                await conn.execute("SELECT pg_advisory_unlock_all()")
+            except Exception:
+                pass
+            await pl.release(conn)
+        return
+    raise ValueError(
+        "Another round is already running for this simulation. "
+        "Wait for it to complete before starting a new one."
+    )
+
 
 def _config_policy_id(cfg: dict[str, Any]) -> int | None:
     raw = cfg.get("policyId")
@@ -402,21 +492,7 @@ async def _external_events_prompt_text(
 
 
 async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
-    p = pool()
-    async with p.acquire() as conn:
-        # ── Phase 1: Read + lock (short DB hold) ──────────────────────────
-        # Try advisory lock — fails immediately if another round is running
-        locked = await conn.fetchval(
-            "SELECT pg_try_advisory_lock($1, $2)",
-            _ADVISORY_LOCK_NAMESPACE,
-            simulation_id,
-        )
-        if not locked:
-            raise ValueError(
-                "Another round is already running for this simulation. "
-                "Wait for it to complete before starting a new one."
-            )
-
+    async with _connection_with_round_lock(simulation_id) as conn:
         try:
             sim = await conn.fetchrow(
                 "SELECT * FROM simulations WHERE id = $1", simulation_id
@@ -469,7 +545,9 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                 )
 
             new_round = sim["current_round"] + 1
-            round_mode = ((new_round - 1) % 4) + 1
+            # Round 1 is always independent posts; every round after that is
+            # discussion-only, cycling through modes 2 → 3 → 4 → 2 → …
+            round_mode = 1 if new_round == 1 else ((new_round - 2) % 3) + 2
             cfg = sim["config"]
             if isinstance(cfg, str):
                 cfg = json.loads(cfg)
@@ -564,6 +642,7 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                         source_bs = source["belief_state"]
                         if isinstance(source_bs, str):
                             source_bs = json.loads(source_bs)
+                        source_ar = agent_rows.get(source["id"])
                         upd = update_belief(
                             {
                                 "beliefState": ar["beliefState"],
@@ -572,6 +651,8 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                             float(source_bs["policySupport"]),
                             float(inf["weight"]) * float(source["credibility_score"]),
                             learning_rate,
+                            source_stance=source_ar["stance"] if source_ar else "",
+                            agent_stance=ar["stance"],
                         )
                         ar["beliefState"] = upd["beliefState"]  # type: ignore[assignment]
                         ar["confidenceLevel"] = upd["confidenceLevel"]
@@ -696,17 +777,43 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                             if others:
                                 target_post = random.choice(others)
 
-                # Peer highlights — thematically similar posts from other agents
+                # Agent's own conversation history for continuity
+                conv_history = _agent_conversation_history(
+                    agent_id, ar["name"], recent_posts, comments_by_post,
+                )
+
+                # Peer highlights — include both similar AND opposing views
                 agent_sentiment = ar["beliefState"]["policySupport"]
-                peer_highlights: list[str] = []
+                peer_similar: list[str] = []
+                peer_opposing: list[str] = []
                 for p in recent_posts:
                     if p.get("agentId") != agent_id and p.get("content"):
-                        if abs(p["sentiment"] - agent_sentiment) < 0.4:
-                            peer_highlights.append(
+                        diff = p["sentiment"] - agent_sentiment
+                        if abs(diff) < 0.4 and len(peer_similar) < 1:
+                            peer_similar.append(
                                 f'{p["agentName"]}: "{p["content"][:100]}"'
                             )
-                    if len(peer_highlights) >= 2:
+                        elif abs(diff) >= 0.6 and len(peer_opposing) < 1:
+                            peer_opposing.append(
+                                f'{p["agentName"]}: "{p["content"][:100]}"'
+                            )
+                    if len(peer_similar) >= 1 and len(peer_opposing) >= 1:
                         break
+                peer_highlights = peer_similar + peer_opposing
+
+                # Activity-level gating: let some agents lurk in rounds 2+
+                if round_mode >= 2:
+                    participate_threshold = 0.3 + 0.7 * float(ar.get("activityLevel", 0.5))
+                    if random.random() > participate_threshold:
+                        return {
+                            "agentId": agent_id,
+                            "name": agent["name"],
+                            "action": "ignore",
+                            "content": "",
+                            "sentiment": 0.0,
+                            "targetPostId": None,
+                            "agentRow": ar,
+                        }
 
                 action, content, sentiment, target_post_id = await generate_llm_action(
                     ar,
@@ -721,6 +828,7 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                     target_comment=target_comment,
                     peer_highlights=peer_highlights if peer_highlights else None,
                     directive=directive,
+                    conversation_history=conv_history if conv_history.strip() and "(no activity yet)" not in conv_history else None,
                 )
 
                 # Hard-enforce: only round 1 may post; all later rounds are comments.
@@ -860,6 +968,9 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                         continue
                     ar = agent_rows[reacting["id"]]
                     target_post = random.choice(round_posts)
+                    conv_hist = _agent_conversation_history(
+                        reacting["id"], ar["name"], recent_posts, comments_by_post,
+                    )
                     rp_ctx: dict[str, Any] = {
                         "postContent": target_post["content"],
                         "postAuthor": target_post.get(
@@ -871,6 +982,15 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                     }
                     if policy_brief:
                         rp_ctx["policyBrief"] = policy_brief
+                    if external_event_context:
+                        rp_ctx["event"] = external_event_context
+                    neighbor_list = [
+                        {"name": other["name"], "stance": other["stance"]}
+                        for other in agents if other["id"] != reacting["id"]
+                    ]
+                    rp_ctx["graphContextSummary"] = build_graph_context_summary(neighbor_list, recent_posts)
+                    if conv_hist.strip() and "(no activity yet)" not in conv_hist:
+                        rp_ctx["conversationHistory"] = conv_hist
                     rprompt = build_agent_reaction_prompt(rp_ctx)
                     reaction_jobs.append({
                         "reacting_id": reacting["id"],
@@ -936,12 +1056,7 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                 )
 
         finally:
-            # Always release the advisory lock
-            await conn.execute(
-                "SELECT pg_advisory_unlock($1, $2)",
-                _ADVISORY_LOCK_NAMESPACE,
-                simulation_id,
-            )
+            pass
 
     # Neo4j sync (fire-and-forget, outside transaction)
     for aa in agent_actions:
@@ -973,17 +1088,7 @@ async def run_simulation_round_stream(
     simulation_id: int,
 ) -> AsyncIterator[dict[str, Any]]:
     """Same logic as run_simulation_round but yields progress events."""
-    p = pool()
-    async with p.acquire() as conn:
-        locked = await conn.fetchval(
-            "SELECT pg_try_advisory_lock($1, $2)",
-            _ADVISORY_LOCK_NAMESPACE,
-            simulation_id,
-        )
-        if not locked:
-            yield {"type": "error", "message": "Another round is already running for this simulation."}
-            return
-
+    async with _connection_with_round_lock(simulation_id) as conn:
         try:
             sim = await conn.fetchrow(
                 "SELECT * FROM simulations WHERE id = $1", simulation_id
@@ -1145,6 +1250,7 @@ async def run_simulation_round_stream(
                         source_bs = source["belief_state"]
                         if isinstance(source_bs, str):
                             source_bs = json.loads(source_bs)
+                        source_ar = agent_rows.get(source["id"])
                         upd = update_belief(
                             {
                                 "beliefState": ar["beliefState"],
@@ -1153,6 +1259,8 @@ async def run_simulation_round_stream(
                             float(source_bs["policySupport"]),
                             float(inf["weight"]) * float(source["credibility_score"]),
                             learning_rate,
+                            source_stance=source_ar["stance"] if source_ar else "",
+                            agent_stance=ar["stance"],
                         )
                         ar["beliefState"] = upd["beliefState"]  # type: ignore[assignment]
                         ar["confidenceLevel"] = upd["confidenceLevel"]
@@ -1297,17 +1405,43 @@ async def run_simulation_round_stream(
                             if others:
                                 target_post = random.choice(others)
 
-                # Peer highlights
+                # Agent's own conversation history for continuity
+                conv_history = _agent_conversation_history(
+                    agent_id, ar["name"], recent_posts, comments_by_post,
+                )
+
+                # Peer highlights — include both similar AND opposing views
                 agent_sentiment = ar["beliefState"]["policySupport"]
-                peer_highlights: list[str] = []
+                peer_similar: list[str] = []
+                peer_opposing: list[str] = []
                 for p in recent_posts:
                     if p.get("agentId") != agent_id and p.get("content"):
-                        if abs(p["sentiment"] - agent_sentiment) < 0.4:
-                            peer_highlights.append(
+                        diff = p["sentiment"] - agent_sentiment
+                        if abs(diff) < 0.4 and len(peer_similar) < 1:
+                            peer_similar.append(
                                 f'{p["agentName"]}: "{p["content"][:100]}"'
                             )
-                    if len(peer_highlights) >= 2:
+                        elif abs(diff) >= 0.6 and len(peer_opposing) < 1:
+                            peer_opposing.append(
+                                f'{p["agentName"]}: "{p["content"][:100]}"'
+                            )
+                    if len(peer_similar) >= 1 and len(peer_opposing) >= 1:
                         break
+                peer_highlights = peer_similar + peer_opposing
+
+                # Activity-level gating: let some agents lurk in rounds 2+
+                if round_mode >= 2:
+                    participate_threshold = 0.3 + 0.7 * float(ar.get("activityLevel", 0.5))
+                    if random.random() > participate_threshold:
+                        return {
+                            "agentId": agent_id,
+                            "name": agent["name"],
+                            "action": "ignore",
+                            "content": "",
+                            "sentiment": 0.0,
+                            "targetPostId": None,
+                            "agentRow": ar,
+                        }
 
                 action, content, sentiment, target_post_id = await generate_llm_action(
                     ar,
@@ -1322,6 +1456,7 @@ async def run_simulation_round_stream(
                     target_comment=target_comment,
                     peer_highlights=peer_highlights if peer_highlights else None,
                     directive=directive,
+                    conversation_history=conv_history if conv_history.strip() and "(no activity yet)" not in conv_history else None,
                 )
 
                 # Hard-enforce: only round 1 may post; all later rounds are comments.
@@ -1352,19 +1487,37 @@ async def run_simulation_round_stream(
                     "agentRow": ar,
                 }
 
-            agent_actions = await asyncio.gather(*[_stream_gen_one(a) for a in agents])
-            for idx, (agent, aa) in enumerate(zip(agents, agent_actions, strict=True)):
-                yield {
-                    "type": "agent_action",
-                    "phase": "generation",
-                    "agentId": agent["id"],
-                    "agentName": agent["name"],
-                    "action": aa["action"],
-                    "sentiment": aa["sentiment"],
-                    "content": (aa["content"] or "")[:200],
-                    "current": idx + 1,
-                    "total": n_agents,
-                }
+            # Process agents in batches so later agents can see earlier outputs
+            _BATCH_SIZE = 4
+            agent_actions: list[dict[str, Any]] = []
+            processed_count = 0
+            for batch_start in range(0, len(agents), _BATCH_SIZE):
+                batch = agents[batch_start:batch_start + _BATCH_SIZE]
+                batch_results = await asyncio.gather(*[_stream_gen_one(a) for a in batch])
+                for aa in batch_results:
+                    agent_actions.append(aa)
+                    # Append completed posts to recent_posts so the next batch
+                    # can see them in their graph context and peer highlights
+                    if aa["action"] == "post" and aa["content"]:
+                        recent_posts.append({
+                            "id": None,  # no DB id yet
+                            "agentId": aa["agentId"],
+                            "agentName": aa["name"],
+                            "content": aa["content"],
+                            "sentiment": aa["sentiment"],
+                        })
+                    processed_count += 1
+                    yield {
+                        "type": "agent_action",
+                        "phase": "generation",
+                        "agentId": aa["agentId"],
+                        "agentName": aa["name"],
+                        "action": aa["action"],
+                        "sentiment": aa["sentiment"],
+                        "content": (aa["content"] or "")[:200],
+                        "current": processed_count,
+                        "total": n_agents,
+                    }
 
             # Write phase
             yield {"type": "status", "phase": "writing", "message": "Persisting results to database..."}
@@ -1474,6 +1627,9 @@ async def run_simulation_round_stream(
                         continue
                     ar = agent_rows[reacting["id"]]
                     target_post = random.choice(round_posts)
+                    conv_hist_s = _agent_conversation_history(
+                        reacting["id"], ar["name"], recent_posts, comments_by_post,
+                    )
                     rp_ctx_s: dict[str, Any] = {
                         "postContent": target_post["content"],
                         "postAuthor": target_post.get(
@@ -1485,6 +1641,15 @@ async def run_simulation_round_stream(
                     }
                     if policy_brief:
                         rp_ctx_s["policyBrief"] = policy_brief
+                    if external_event_context:
+                        rp_ctx_s["event"] = external_event_context
+                    neighbor_list_s = [
+                        {"name": other["name"], "stance": other["stance"]}
+                        for other in agents if other["id"] != reacting["id"]
+                    ]
+                    rp_ctx_s["graphContextSummary"] = build_graph_context_summary(neighbor_list_s, recent_posts)
+                    if conv_hist_s.strip() and "(no activity yet)" not in conv_hist_s:
+                        rp_ctx_s["conversationHistory"] = conv_hist_s
                     rprompt_s = build_agent_reaction_prompt(rp_ctx_s)
                     reaction_jobs_stream.append({
                         "reacting_id": reacting["id"],
@@ -1548,11 +1713,7 @@ async def run_simulation_round_stream(
                 )
 
         finally:
-            await conn.execute(
-                "SELECT pg_advisory_unlock($1, $2)",
-                _ADVISORY_LOCK_NAMESPACE,
-                simulation_id,
-            )
+            pass
 
     # Neo4j sync
     for aa in agent_actions:

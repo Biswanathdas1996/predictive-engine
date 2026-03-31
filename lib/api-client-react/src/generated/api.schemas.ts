@@ -182,6 +182,11 @@ export interface Post {
   round: number;
   agentId: number;
   agentName: string;
+  /** Persona age from agent record */
+  agentAge?: number;
+  agentGender?: string;
+  agentRegion?: string;
+  agentOccupation?: string;
   simulationId: number;
   createdAt: string;
 }
@@ -196,6 +201,11 @@ export interface GraphComment {
   postId: number;
   simulationId: number;
   createdAt?: string | null;
+  /** Persona age from agent record */
+  agentAge?: number;
+  agentGender?: string;
+  agentRegion?: string;
+  agentOccupation?: string;
 }
 
 export interface SimulationGraphNode {
