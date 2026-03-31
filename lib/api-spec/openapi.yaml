@@ -294,6 +294,38 @@ paths:
               schema:
                 $ref: "#/components/schemas/SimulationGraphView"
 
+  /simulations/{id}/decode-belief-chart:
+    post:
+      operationId: decodeBeliefChart
+      tags: [simulations]
+      summary: Decode belief evolution chart via PwC GenAI
+      description: >-
+        Sends the chart series and simulation context to PwC GenAI and returns a short layman
+        business narrative (no raw numbers required in prose).
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecodeBeliefChartBody"
+      responses:
+        "200":
+          description: Generated narrative report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DecodeBeliefChartResponse"
+        "503":
+          description: PwC GenAI unavailable
+        "502":
+          description: GenAI call failed
+
   /policies:
     get:
       operationId: listPolicies
@@ -392,6 +424,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Group"
+
+  /groups/suggest-cohort-fields:
+    post:
+      operationId: suggestGroupCohortFields
+      tags: [groups]
+      summary: Suggest cohort form fields via GenAI
+      description: >-
+        Given a group name and optional notes, returns suggested description, agent count,
+        and cohort spec text fields for the create-group form (PwC GenAI).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SuggestGroupCohortFieldsBody"
+      responses:
+        "200":
+          description: Suggested field values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuggestGroupCohortFieldsResponse"
 
   /groups/with-agents:
     post:
@@ -887,6 +941,8 @@ components:
 
     SimulationGraphNode:
       type: object
+      description: >-
+        Agent node for the simulation graph; includes full persona and belief fields for the inspector.
       properties:
         id:
           type: integer
@@ -898,8 +954,29 @@ components:
           type: number
         policySupport:
           type: number
+          description: Denormalized from beliefState.policySupport for quick display.
         confidenceLevel:
           type: number
+        age:
+          type: integer
+        gender:
+          type: string
+        region:
+          type: string
+        occupation:
+          type: string
+        persona:
+          type: string
+        systemPrompt:
+          type: ["string", "null"]
+        credibilityScore:
+          type: number
+        activityLevel:
+          type: number
+        beliefState:
+          $ref: "#/components/schemas/BeliefState"
+        groupId:
+          type: ["integer", "null"]
       required:
         - id
         - name
@@ -907,6 +984,14 @@ components:
         - influenceScore
         - policySupport
         - confidenceLevel
+        - age
+        - gender
+        - region
+        - occupation
+        - persona
+        - credibilityScore
+        - activityLevel
+        - beliefState
 
     SimulationGraphEdge:
       type: object
@@ -1064,6 +1149,76 @@ components:
       required:
         - group
         - agentsCreated
+
+    SuggestGroupCohortFieldsBody:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 255
+        description:
+          type: string
+          maxLength: 4000
+      required:
+        - name
+
+    SuggestGroupCohortFieldsResponse:
+      type: object
+      properties:
+        description:
+          type: string
+        agentCount:
+          type: integer
+          minimum: 1
+          maximum: 500
+        demographics:
+          type: string
+        community:
+          type: string
+        educationProfession:
+          type: string
+      required:
+        - description
+        - agentCount
+        - demographics
+        - community
+        - educationProfession
+
+    BeliefEvolutionPoint:
+      type: object
+      properties:
+        round:
+          type: integer
+          minimum: 0
+        support:
+          type: number
+        sentiment:
+          type: number
+      required:
+        - round
+        - support
+        - sentiment
+
+    DecodeBeliefChartBody:
+      type: object
+      properties:
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/BeliefEvolutionPoint"
+          minItems: 1
+          maxItems: 500
+      required:
+        - series
+
+    DecodeBeliefChartResponse:
+      type: object
+      properties:
+        report:
+          type: string
+      required:
+        - report
 
     CreateGroupBody:
       type: object

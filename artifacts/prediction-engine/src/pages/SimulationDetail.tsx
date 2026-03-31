@@ -3,6 +3,7 @@ import { useRoute } from "wouter";
 import {
   useGetSimulation,
   useGetSimulationPosts,
+  ApiError,
   customFetch,
   type Post,
   type GraphComment,
@@ -18,6 +19,8 @@ import {
   Radio,
   CornerDownRight,
   BarChart2,
+  Info,
+  Sparkles,
   Heart,
   Repeat2,
   Share2,
@@ -44,6 +47,36 @@ function shortFeedTime(iso: string | undefined): string {
   }
 }
 
+/** Layman wording for where a −1…1 “support” score lands (no numbers). */
+function scoreToBackingLabel(score: number): string {
+  if (score < -0.55) return "mostly opposed to the policy";
+  if (score < -0.2) return "skeptical, with concern outweighing buy-in";
+  if (score <= 0.2) return "split—neither clearly for nor against";
+  if (score <= 0.55) return "cautiously supportive on balance";
+  return "clearly supportive overall";
+}
+
+/** Layman wording for public mood from a −1…1 style score (no numbers). */
+function scoreToPublicMoodLabel(score: number): string {
+  if (score < -0.55) return "the tone is quite negative";
+  if (score < -0.2) return "people sound guarded or uneasy";
+  if (score <= 0.2) return "reaction is fairly neutral";
+  if (score <= 0.55) return "the tone is mildly positive";
+  return "the mood looks clearly positive";
+}
+
+function supportTrendLayman(t: "up" | "down" | "flat"): string {
+  if (t === "up") return "Policy support has been building across the steps on the chart.";
+  if (t === "down") return "Policy support has softened compared with earlier in the run.";
+  return "Policy support has stayed in a similar range across the steps shown.";
+}
+
+function sentimentTrendLayman(t: "up" | "down" | "flat"): string {
+  if (t === "up") return "Public sentiment has warmed.";
+  if (t === "down") return "Public sentiment has cooled.";
+  return "Public sentiment has held fairly steady.";
+}
+
 function avatarGradientClass(agentId: number): string {
   const palettes = [
     "bg-gradient-to-br from-sky-400 to-blue-600 text-white shadow-inner",
@@ -56,6 +89,7 @@ function avatarGradientClass(agentId: number): string {
   return palettes[Math.abs(agentId) % palettes.length];
 }
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimulationNetworkPanel } from "@/components/SimulationNetworkPanel";
 import { consumeSSEStream, type SSEEvent } from "@/lib/sse";
@@ -117,6 +151,9 @@ export default function SimulationDetail() {
   const [streamGraphHighlightAgentId, setStreamGraphHighlightAgentId] = useState<number | null>(null);
   /** `null` = show full graph; `[]` = round started, empty canvas; ids = only those nodes visible (SSE). */
   const [streamRevealedAgentIds, setStreamRevealedAgentIds] = useState<number[] | null>(null);
+  const [beliefDecodeLoading, setBeliefDecodeLoading] = useState(false);
+  const [beliefDecodeError, setBeliefDecodeError] = useState<string | null>(null);
+  const [beliefDecodeReport, setBeliefDecodeReport] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
 
@@ -268,13 +305,54 @@ export default function SimulationDetail() {
     });
   }, [id, isRunning, queryClient]);
 
-  if (isLoading || !sim) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading simulation core...</div>;
+  const mockEvolutionData = useMemo(() => {
+    if (!sim) return [];
+    return Array.from({ length: sim.currentRound + 1 }).map((_, i) => ({
+      round: i,
+      support: 0.2 + Math.sin(i * 0.5) * 0.3 + i * 0.05,
+      sentiment: 0.5 + Math.cos(i * 0.5) * 0.2,
+    }));
+  }, [sim]);
 
-  const mockEvolutionData = Array.from({ length: sim.currentRound + 1 }).map((_, i) => ({
-    round: i,
-    support: 0.2 + (Math.sin(i * 0.5) * 0.3) + (i * 0.05),
-    sentiment: 0.5 + (Math.cos(i * 0.5) * 0.2)
-  }));
+  const beliefChartStateSummary = useMemo(() => {
+    const data = mockEvolutionData;
+    if (data.length === 0) return null;
+    const first = data[0];
+    const last = data[data.length - 1];
+    const eps = 0.02;
+    const trend = (a: number, b: number): "up" | "down" | "flat" =>
+      b - a > eps ? "up" : b - a < -eps ? "down" : "flat";
+    return {
+      roundCount: data.length,
+      lastRound: last.round,
+      supportTrend: trend(first.support, last.support),
+      sentimentTrend: trend(first.sentiment, last.sentiment),
+      lastSupport: last.support,
+      lastSentiment: last.sentiment,
+    };
+  }, [mockEvolutionData]);
+
+  const handleDecodeBeliefChart = useCallback(async () => {
+    if (!Number.isFinite(id) || id <= 0 || mockEvolutionData.length === 0) return;
+    setBeliefDecodeLoading(true);
+    setBeliefDecodeError(null);
+    try {
+      const res = await customFetch<{ report: string }>(`/api/simulations/${id}/decode-belief-chart`, {
+        method: "POST",
+        body: JSON.stringify({ series: mockEvolutionData }),
+      });
+      setBeliefDecodeReport(res.report);
+    } catch (e) {
+      setBeliefDecodeReport(null);
+      setBeliefDecodeError(
+        e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Could not generate the report. Try again.",
+      );
+    } finally {
+      setBeliefDecodeLoading(false);
+    }
+  }, [id, mockEvolutionData]);
+
+  if (isLoading || !sim) return <div className="p-8 text-center text-muted-foreground animate-pulse">Loading simulation core...</div>;
 
   const progressPct =
     streamProgress && streamProgress.total > 0
@@ -617,18 +695,49 @@ export default function SimulationDetail() {
           </div>
         </TabsContent>
 
-        <TabsContent value="beliefs" className="mt-0 space-y-4">
-          <div className="bg-card border border-border p-6 rounded-2xl shadow-sm min-h-[420px] h-[min(520px,55vh)] flex flex-col w-full">
-            <div className="mb-4">
-              <h3 className="font-semibold flex items-center gap-2 text-lg">
-                <BarChart2 className="w-5 h-5 text-primary" />
-                Belief evolution trajectory
-              </h3>
-              <p className="text-xs text-muted-foreground mt-1">
-                Illustrative policy support and public sentiment by round (placeholder series until wired to snapshots).
-              </p>
+        <TabsContent value="beliefs" className="mt-0 space-y-5">
+          <div className="bg-card border border-border p-6 rounded-2xl shadow-sm min-h-[360px] h-[min(480px,50vh)] flex flex-col w-full">
+            <div className="mb-4 shrink-0 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h3 className="font-semibold flex items-center gap-2 text-lg">
+                  <BarChart2 className="w-5 h-5 text-primary" />
+                  Belief evolution trajectory
+                </h3>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Illustrative policy support and public sentiment by round (placeholder series until wired to snapshots).
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-col items-stretch gap-1.5 sm:items-end">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="gap-2 rounded-xl font-medium shadow-sm"
+                  disabled={beliefDecodeLoading || mockEvolutionData.length === 0}
+                  onClick={() => void handleDecodeBeliefChart()}
+                >
+                  {beliefDecodeLoading ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" strokeWidth={2} />
+                  ) : (
+                    <Sparkles className="h-4 w-4" strokeWidth={2} />
+                  )}
+                  Decode the graph
+                </Button>
+                <span className="text-[10px] text-muted-foreground sm:text-right">PwC GenAI · plain-English summary</span>
+              </div>
             </div>
-            <div className="flex-1 w-full min-h-[280px]">
+            {beliefDecodeError ? (
+              <div className="mb-3 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive" role="alert">
+                {beliefDecodeError}
+              </div>
+            ) : null}
+            {beliefDecodeReport ? (
+              <div className="mb-4 shrink-0 rounded-xl border border-primary/20 bg-primary/[0.04] px-4 py-3 ring-1 ring-border/40">
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-primary">GenAI read on this chart</p>
+                <p className="mt-2 text-sm leading-relaxed text-foreground whitespace-pre-wrap">{beliefDecodeReport}</p>
+              </div>
+            ) : null}
+            <div className="flex-1 w-full min-h-[240px]">
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={mockEvolutionData} margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
@@ -644,6 +753,67 @@ export default function SimulationDetail() {
               </ResponsiveContainer>
             </div>
           </div>
+
+          <section
+            className="w-full rounded-2xl border border-primary/20 bg-gradient-to-br from-primary/[0.08] via-muted/30 to-card p-6 shadow-md ring-1 ring-border/60"
+            aria-labelledby="beliefs-chart-guide-heading"
+          >
+            <div className="flex flex-col gap-5 sm:flex-row sm:items-start sm:gap-6">
+              <div
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-primary/15 text-primary shadow-sm"
+                aria-hidden
+              >
+                <Info className="h-5 w-5" strokeWidth={2} />
+              </div>
+              <div className="min-w-0 flex-1 space-y-5">
+                <div>
+                  <h4 id="beliefs-chart-guide-heading" className="text-base font-semibold tracking-tight text-foreground">
+                    How to read this chart
+                  </h4>
+                  <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground sm:text-base">
+                    The bottom axis is <span className="font-medium text-foreground">time in rounds</span> (from the first round through round{" "}
+                    {beliefChartStateSummary?.lastRound ?? sim.currentRound}). The vertical scale is a simple{" "}
+                    <span className="font-medium text-foreground">support score</span>: lower means more pushback, higher means more buy-in (from −1 to +1).
+                  </p>
+                  <ul className="mt-4 space-y-2.5 text-[15px] leading-relaxed text-muted-foreground sm:text-base">
+                    <li className="flex gap-3">
+                      <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-primary" aria-hidden />
+                      <span>
+                        <span className="font-medium text-foreground">Policy support</span> — how strongly agents back the policy or option you are testing.
+                      </span>
+                    </li>
+                    <li className="flex gap-3">
+                      <span className="mt-2 h-2 w-2 shrink-0 rounded-full bg-[hsl(var(--accent))]" aria-hidden />
+                      <span>
+                        <span className="font-medium text-foreground">Public sentiment</span> — the broader mood or perception in the simulation.
+                      </span>
+                    </li>
+                  </ul>
+                  <p className="mt-4 rounded-xl border border-border/70 bg-background/80 px-4 py-3 text-sm leading-relaxed text-muted-foreground">
+                    Today this chart uses <span className="font-medium text-foreground">sample curves</span> so you can see the layout. When your environment saves real belief snapshots, these lines will reflect actual results from each round.
+                  </p>
+                </div>
+                {beliefChartStateSummary ? (
+                  <div className="border-t border-border/60 pt-5">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-primary">Summary for this run</p>
+                    <p className="mt-2 text-[15px] leading-relaxed text-muted-foreground sm:text-base">
+                      {beliefChartStateSummary.roundCount === 1
+                        ? "You’re still at the opening step—think of this as a starting snapshot until more of the run is filled in."
+                        : "You’re partway through the simulation; the chart summarizes how things have moved from the beginning up to now."}{" "}
+                      {supportTrendLayman(beliefChartStateSummary.supportTrend)}{" "}
+                      <span className="font-medium text-foreground">
+                        At this point, stakeholders come across as {scoreToBackingLabel(beliefChartStateSummary.lastSupport)}.
+                      </span>{" "}
+                      {sentimentTrendLayman(beliefChartStateSummary.sentimentTrend)}{" "}
+                      <span className="font-medium text-foreground">
+                        {scoreToPublicMoodLabel(beliefChartStateSummary.lastSentiment).replace(/^./, (c) => c.toUpperCase())}.
+                      </span>
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </section>
         </TabsContent>
 
         <TabsContent value="network" className="mt-0" forceMount>

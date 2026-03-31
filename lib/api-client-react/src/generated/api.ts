@@ -24,6 +24,8 @@ import type {
   CreateGroupBody,
   CreateGroupWithAgentsBody,
   CreateGroupWithAgentsResponse,
+  SuggestGroupCohortFieldsBody,
+  SuggestGroupCohortFieldsResponse,
   CreateInfluenceBody,
   CreatePolicyBody,
   CreateSimulationBody,
@@ -1765,6 +1767,95 @@ export const useCreateGroup = <
   TContext
 > => {
   return useMutation(getCreateGroupMutationOptions(options));
+};
+
+/**
+ * @summary Suggest cohort form fields via GenAI
+ */
+export const getSuggestGroupCohortFieldsUrl = () => {
+  return `/api/groups/suggest-cohort-fields`;
+};
+
+export const suggestGroupCohortFields = async (
+  suggestGroupCohortFieldsBody: SuggestGroupCohortFieldsBody,
+  options?: RequestInit,
+): Promise<SuggestGroupCohortFieldsResponse> => {
+  return customFetch<SuggestGroupCohortFieldsResponse>(
+    getSuggestGroupCohortFieldsUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(suggestGroupCohortFieldsBody),
+    },
+  );
+};
+
+export const getSuggestGroupCohortFieldsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof suggestGroupCohortFields>>,
+    TError,
+    { data: BodyType<SuggestGroupCohortFieldsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof suggestGroupCohortFields>>,
+  TError,
+  { data: BodyType<SuggestGroupCohortFieldsBody> },
+  TContext
+> => {
+  const mutationKey = ["suggestGroupCohortFields"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof suggestGroupCohortFields>>,
+    { data: BodyType<SuggestGroupCohortFieldsBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+    return suggestGroupCohortFields(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type SuggestGroupCohortFieldsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof suggestGroupCohortFields>>
+>;
+export type SuggestGroupCohortFieldsMutationBody =
+  BodyType<SuggestGroupCohortFieldsBody>;
+export type SuggestGroupCohortFieldsMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Suggest cohort form fields via GenAI
+ */
+export const useSuggestGroupCohortFields = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof suggestGroupCohortFields>>,
+    TError,
+    { data: BodyType<SuggestGroupCohortFieldsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof suggestGroupCohortFields>>,
+  TError,
+  { data: BodyType<SuggestGroupCohortFieldsBody> },
+  TContext
+> => {
+  return useMutation(getSuggestGroupCohortFieldsMutationOptions(options));
 };
 
 /**

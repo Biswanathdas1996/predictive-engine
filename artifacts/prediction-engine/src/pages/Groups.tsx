@@ -3,7 +3,9 @@ import {
   createGroup,
   useCreateGroupWithAgents,
   useListGroups,
+  useSuggestGroupCohortFields,
   type Group,
+  type SuggestGroupCohortFieldsResponse,
 } from "@workspace/api-client-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Network, Plus, Sparkles, X } from "lucide-react";
@@ -69,6 +71,33 @@ export default function Groups() {
     },
   });
 
+  const suggestFields = useSuggestGroupCohortFields({
+    mutation: {
+      onSuccess: (data: SuggestGroupCohortFieldsResponse) => {
+        setDescription(data.description ?? "");
+        setAgentCount(
+          Math.max(1, Math.min(500, Math.floor(data.agentCount ?? 24))),
+        );
+        setDemographics(data.demographics ?? "");
+        setCommunity(data.community ?? "");
+        setEducationProfession(data.educationProfession ?? "");
+        toast({
+          title: "Fields filled",
+          description: "Review and edit the suggested cohort details, then submit.",
+        });
+      },
+      onError: (err: unknown) => {
+        const message =
+          err instanceof Error ? err.message : "Something went wrong.";
+        toast({
+          variant: "destructive",
+          title: "Could not generate fields",
+          description: message,
+        });
+      },
+    },
+  });
+
   const resetDialog = () => {
     setIsDialogOpen(false);
     setEmptyGroupOnly(false);
@@ -115,7 +144,8 @@ export default function Groups() {
     });
   };
 
-  const pending = saveEmptyGroup.isPending || saveCohort.isPending;
+  const pending =
+    saveEmptyGroup.isPending || saveCohort.isPending || suggestFields.isPending;
 
   return (
     <div className="space-y-6">
@@ -218,6 +248,28 @@ export default function Groups() {
                   autoComplete="off"
                   disabled={pending}
                 />
+                <button
+                  type="button"
+                  disabled={pending || !name.trim()}
+                  onClick={() => {
+                    const n = name.trim();
+                    if (!n) return;
+                    suggestFields.mutate({
+                      data: {
+                        name: n,
+                        description: description.trim() || undefined,
+                      },
+                    });
+                  }}
+                  className="mt-2 w-full flex items-center justify-center gap-2 rounded-xl border border-border bg-secondary/40 px-3 py-2 text-sm font-medium text-foreground hover:bg-secondary/70 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+                >
+                  <Sparkles className="w-4 h-4 text-accent shrink-0" />
+                  {suggestFields.isPending ? "Generating…" : "Generate fields with AI"}
+                </button>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Uses PwC GenAI from the group name and any description you already typed. Fills description,
+                  agent count, and cohort details (you can edit everything before creating).
+                </p>
               </div>
 
               <div className="space-y-1.5">

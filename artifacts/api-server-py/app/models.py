@@ -55,6 +55,35 @@ class CreateGroupWithAgentsRequest(BaseModel):
     educationProfession: str = Field(..., min_length=1, max_length=4000)
 
 
+class SuggestGroupCohortFieldsRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str = Field(default="", max_length=4000)
+
+
+class SuggestGroupCohortFieldsResponse(BaseModel):
+    description: str = Field(default="", max_length=4000)
+    agentCount: int = Field(..., ge=1, le=500)
+    demographics: str = Field(..., min_length=1, max_length=4000)
+    community: str = Field(..., min_length=1, max_length=4000)
+    educationProfession: str = Field(..., min_length=1, max_length=4000)
+
+
+class BeliefEvolutionSeriesPoint(BaseModel):
+    """One row of the belief trajectory chart (policy support vs public sentiment by round)."""
+
+    round: int = Field(..., ge=0, le=10_000)
+    support: float = Field(..., ge=-3, le=3)
+    sentiment: float = Field(..., ge=-3, le=3)
+
+
+class DecodeBeliefChartRequest(BaseModel):
+    series: list[BeliefEvolutionSeriesPoint] = Field(..., min_length=1, max_length=500)
+
+
+class DecodeBeliefChartResponse(BaseModel):
+    report: str = Field(..., min_length=1, max_length=12_000)
+
+
 class CreateSimulationRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str = Field(default="", max_length=2000)
@@ -141,6 +170,16 @@ class GraphNodeOut(BaseModel):
     influenceScore: float
     policySupport: float
     confidenceLevel: float
+    age: int
+    gender: str
+    region: str
+    occupation: str
+    persona: str
+    systemPrompt: str | None = None
+    credibilityScore: float
+    activityLevel: float
+    beliefState: BeliefStateSchema
+    groupId: int | None = None
 
 
 class GraphEdgeOut(BaseModel):

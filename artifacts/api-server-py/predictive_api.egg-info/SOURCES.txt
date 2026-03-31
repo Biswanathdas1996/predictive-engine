@@ -17,6 +17,7 @@ app/routers/policies.py
 app/routers/simulations.py
 app/services/__init__.py
 app/services/agent_cohort.py
+app/services/belief_chart_decode.py
 app/services/document_text.py
 app/services/llm_config_loader.py
 app/services/llm_service.py

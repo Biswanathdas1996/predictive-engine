@@ -13,6 +13,8 @@ from app.auth import require_auth
 from app.db import pool
 from app.models import (
     CreateSimulationRequest,
+    DecodeBeliefChartRequest,
+    DecodeBeliefChartResponse,
     MonteCarloRequest,
     MonteCarloResultOut,
     PaginationParams,
@@ -29,7 +31,8 @@ from app.serialize import (
     post_row,
     simulation_row,
 )
-from app.services import neo4j_service
+from app.services import belief_chart_decode, neo4j_service
+from app.services.llm_service import is_llm_available
 from app.services.simulation_engine import (
     run_monte_carlo,
     run_monte_carlo_stream,
@@ -690,27 +693,56 @@ async def get_simulation_graph(id: int) -> dict:
 
     nodes: list[dict] = []
     for a in agents:
-        bs = a["belief_state"]
-        if isinstance(bs, str):
-            bs = json.loads(bs)
+        row = agent_row(a)
+        bs = row["beliefState"]
         nodes.append(
             {
-                "id": a["id"],
-                "name": a["name"],
-                "stance": a["stance"],
-                "influenceScore": float(a["influence_score"]),
-                "policySupport": float(bs.get("policySupport", 0)),
-                "confidenceLevel": float(a["confidence_level"]),
+                "id": row["id"],
+                "name": row["name"],
+                "stance": row["stance"],
+                "influenceScore": row["influenceScore"],
+                "policySupport": bs["policySupport"],
+                "confidenceLevel": row["confidenceLevel"],
+                "age": row["age"],
+                "gender": row["gender"],
+                "region": row["region"],
+                "occupation": row["occupation"],
+                "persona": row["persona"],
+                "systemPrompt": row.get("systemPrompt"),
+                "credibilityScore": row["credibilityScore"],
+                "activityLevel": row["activityLevel"],
+                "beliefState": bs,
+                "groupId": row.get("groupId"),
             }
         )
 
+    # Build edges dynamically from comment interactions:
+    # When agent B comments on agent A's post → edge from B to A.
+    # At round 0 (no comments yet) the graph has zero edges; edges grow
+    # as agents reply to each other during the simulation.
+    post_author: dict[int, int] = {p["id"]: p["agent_id"] for p in posts}
+    edge_counts: dict[tuple[int, int], int] = {}
+    for c in comments:
+        commenter_id = c["agent_id"]
+        author_id = post_author.get(c["post_id"])
+        if author_id is None or commenter_id == author_id:
+            continue
+        key = (commenter_id, author_id)
+        edge_counts[key] = edge_counts.get(key, 0) + 1
+
+    # Look up pre-seeded influence weights for sizing (optional)
+    inf_weights: dict[tuple[int, int], float] = {
+        (inf["source_agent_id"], inf["target_agent_id"]): float(inf["weight"])
+        for inf in influences
+    }
+
     edges = [
         {
-            "source": inf["source_agent_id"],
-            "target": inf["target_agent_id"],
-            "weight": float(inf["weight"]),
+            "source": src,
+            "target": tgt,
+            "weight": inf_weights.get((src, tgt), 0.5),
         }
-        for inf in influences
+        for (src, tgt) in edge_counts
     ]
 
     posts_out = [
@@ -727,6 +759,50 @@ async def get_simulation_graph(id: int) -> dict:
         "posts": posts_out,
         "comments": comments_out,
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /simulations/{id}/decode-belief-chart  —  PwC GenAI layman narrative
+# ---------------------------------------------------------------------------
+@router.post("/simulations/{id}/decode-belief-chart")
+async def decode_belief_chart(
+    id: int,
+    body: DecodeBeliefChartRequest,
+) -> DecodeBeliefChartResponse:
+    if not is_llm_available():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "PwC GenAI is not configured or unavailable",
+                "hint": "Set PWC_GENAI_API_KEY or PWC_GENAI_BEARER_TOKEN and ensure the service can reach the gateway.",
+            },
+        )
+
+    p = pool()
+    async with p.acquire() as conn:
+        sim = await conn.fetchrow(
+            "SELECT name, description, current_round FROM simulations WHERE id = $1",
+            id,
+        )
+    if not sim:
+        raise HTTPException(status_code=404, detail={"error": "Simulation not found"})
+
+    series_dicts = [p.model_dump() for p in body.series]
+    try:
+        report = await belief_chart_decode.decode_belief_chart_report(
+            simulation_name=sim["name"] or "",
+            simulation_description=(sim["description"] or "").strip(),
+            current_round=int(sim["current_round"] or 0),
+            series=series_dicts,
+        )
+    except Exception as exc:
+        logger.exception("belief chart decode failed for simulation %s", id)
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "GenAI decode failed", "message": str(exc)},
+        ) from exc
+
+    return DecodeBeliefChartResponse(report=report)
 
 
 # ---------------------------------------------------------------------------

@@ -2,6 +2,8 @@ import { defineConfig, InputTransformerFn } from "orval";
 import path from "path";
 
 const root = path.resolve(__dirname, "..", "..");
+// Resolved relative to the config file directory when Orval normalizes paths.
+const openApiPath = path.join(__dirname, "openapi.yaml");
 const apiClientReactSrc = path.resolve(root, "lib", "api-client-react", "src");
 const apiZodSrc = path.resolve(root, "lib", "api-zod", "src");
 
@@ -16,7 +18,7 @@ const titleTransformer: InputTransformerFn = (config) => {
 export default defineConfig({
   "api-client-react": {
     input: {
-      target: "./openapi.yaml",
+      target: openApiPath,
       override: {
         transformer: titleTransformer,
       },
@@ -27,7 +29,8 @@ export default defineConfig({
       client: "react-query",
       mode: "split",
       baseUrl: "/api",
-      clean: true,
+      // Never wipe generated sources on failure (leaves the app buildable; delete manually if needed).
+      clean: false,
       prettier: true,
       override: {
         fetch: {
@@ -42,7 +45,7 @@ export default defineConfig({
   },
   zod: {
     input: {
-      target: "./openapi.yaml",
+      target: openApiPath,
       override: {
         transformer: titleTransformer,
       },
@@ -53,7 +56,7 @@ export default defineConfig({
       target: "generated",
       schemas: { path: "generated/types", type: "typescript" },
       mode: "split",
-      clean: true,
+      clean: false,
       prettier: true,
       override: {
         zod: {

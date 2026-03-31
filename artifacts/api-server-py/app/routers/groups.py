@@ -6,7 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import require_auth
 from app.db import pool
-from app.models import CreateGroupWithAgentsRequest
+from app.models import (
+    CreateGroupWithAgentsRequest,
+    SuggestGroupCohortFieldsRequest,
+    SuggestGroupCohortFieldsResponse,
+)
 from app.rate_limit import rate_limit_dependency
 from app.serialize import agent_row, group_row
 from app.services import agent_cohort
@@ -74,6 +78,21 @@ async def create_group(body: dict) -> dict:
             json.dumps(spec),
         )
     return group_row(row)
+
+
+@router.post(
+    "/groups/suggest-cohort-fields",
+    dependencies=[Depends(require_auth), Depends(rate_limit_dependency)],
+)
+async def suggest_group_cohort_fields(
+    body: SuggestGroupCohortFieldsRequest,
+) -> SuggestGroupCohortFieldsResponse:
+    """Use PwC GenAI to prefill cohort form fields from group name and optional notes."""
+    data = await agent_cohort.suggest_cohort_form_fields(
+        group_name=body.name.strip(),
+        description=(body.description or "").strip(),
+    )
+    return SuggestGroupCohortFieldsResponse(**data)
 
 
 @router.post(

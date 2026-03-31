@@ -1293,14 +1293,15 @@ def get_llm_public_details() -> dict[str, str | None]:
     return {"llmBackend": "pwc_genai", "llmModel": _config.effective_model_id(None)}
 
 
-async def generate_text(prompt: str) -> str:
+async def generate_text(prompt: str, max_tokens: Optional[int] = None) -> str:
     if not _llm_available:
         raise RuntimeError("No LLM service available")
     temp = float(os.environ.get("PWC_GENAI_TEMPERATURE", "0.4"))
+    tok = max_tokens if max_tokens is not None else _default_max_tokens()
     return await call_pwc_genai_async(
         prompt,
         task_name="simulation_agent",
-        max_tokens=_default_max_tokens(),
+        max_tokens=tok,
         temperature=temp,
     )
 
@@ -1352,7 +1353,9 @@ async def policy_key_points_brief(title: str, summary: str) -> str:
 
 async def generate_agent_action(prompt: str) -> LLMResponse | None:
     try:
-        raw = await generate_text(prompt)
+        # Agent action JSON needs ~100 tokens minimum for a 280-char content field;
+        # use 400 tokens so the response is never truncated mid-JSON.
+        raw = await generate_text(prompt, max_tokens=400)
         m = re.search(r"\{[\s\S]*\}", raw)
         if not m:
             logger.warning("LLM response did not contain valid JSON")
@@ -1389,6 +1392,27 @@ async def generate_agent_action(prompt: str) -> LLMResponse | None:
         return None
 
 
+async def generate_orchestrator_plan(prompt: str) -> list[dict[str, Any]] | None:
+    """Call the LLM to produce the orchestrator round plan (JSON array)."""
+    try:
+        raw = await generate_text(prompt, max_tokens=1024)
+        m = re.search(r"\[[\s\S]*\]", raw)
+        if not m:
+            logger.warning("Orchestrator response did not contain a JSON array")
+            return None
+        parsed = json.loads(m.group(0))
+        if not isinstance(parsed, list):
+            return None
+        return parsed
+    except Exception as exc:
+        logger.warning(
+            "Failed to generate orchestrator plan: %s: %s",
+            type(exc).__name__,
+            exc if str(exc) else repr(exc),
+        )
+        return None
+
+
 __all__ = [
     "LLMResponse",
     "ModelType",
@@ -1404,6 +1428,7 @@ __all__ = [
     "close_async_client",
     "detect_model_type",
     "generate_agent_action",
+    "generate_orchestrator_plan",
     "generate_text",
     "get_llm_concurrency_stats",
     "get_llm_public_details",

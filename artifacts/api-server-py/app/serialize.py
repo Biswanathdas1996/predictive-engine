@@ -13,25 +13,99 @@ def _dt(v: datetime | None) -> str | None:
     return v.isoformat()
 
 
+def normalize_belief_state_json(raw: Any) -> dict[str, float]:
+    """Ensure policy/trust/econ keys exist (camelCase + snake_case); fill DB defaults when missing."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def pick(keys: tuple[str, ...], default: float) -> float:
+        for k in keys:
+            if k not in raw:
+                continue
+            v = raw.get(k)
+            if v is None:
+                continue
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                break
+        return default
+
+    ps = pick(("policySupport", "policy_support"), 0.0)
+    tg = pick(("trustInGovernment", "trust_in_government"), 0.5)
+    eo = pick(("economicOutlook", "economic_outlook"), 0.5)
+    return {
+        "policySupport": max(-1.0, min(1.0, ps)),
+        "trustInGovernment": max(-1.0, min(1.0, tg)),
+        "economicOutlook": max(-1.0, min(1.0, eo)),
+    }
+
+
+def _float_col(r: asyncpg.Record, col: str, default: float) -> float:
+    v = r.get(col)
+    if v is None:
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 def agent_row(r: asyncpg.Record) -> dict[str, Any]:
-    bs = r["belief_state"]
-    if isinstance(bs, str):
-        bs = json.loads(bs)
+    bs = normalize_belief_state_json(r["belief_state"])
+
+    cred = _float_col(r, "credibility_score", 0.5)
+    act = _float_col(r, "activity_level", 0.5)
+    # Legacy / corrupt rows sometimes have both stuck at 0 while influence is set.
+    if cred <= 0.0 and act <= 0.0 and _float_col(r, "influence_score", 0.0) > 0.01:
+        cred, act = 0.5, 0.5
+
+    try:
+        age = int(r["age"])
+    except (TypeError, ValueError):
+        age = 0
+    if age < 18:
+        age = 30
+
+    gender = str(r.get("gender") or "").strip() or "unspecified"
+    region = str(r.get("region") or "").strip() or "Unknown"
+    occupation = str(r.get("occupation") or "").strip() or "Unknown"
+    persona = str(r.get("persona") or "").strip()
+    if not persona:
+        persona = (
+            f"{occupation} in {region}; participates in community and policy discussions "
+            f"with a {str(r.get('stance') or 'neutral')} baseline stance."
+        )
+
+    sp_raw = r.get("system_prompt")
+    system_prompt = str(sp_raw).strip() if sp_raw else ""
+    if not system_prompt:
+        nm = str(r.get("name") or "Agent").strip()
+        system_prompt = (
+            f"You are {nm}, {occupation} in {region}. {persona[:900]} "
+            "Stay consistently in this voice; ground reactions in your role and lived context."
+        )[:4000]
+
     return {
         "id": r["id"],
         "name": r["name"],
-        "age": r["age"],
-        "gender": r["gender"],
-        "region": r["region"],
-        "occupation": r["occupation"],
-        "persona": r["persona"],
-        "systemPrompt": r.get("system_prompt"),
+        "age": age,
+        "gender": gender,
+        "region": region,
+        "occupation": occupation,
+        "persona": persona,
+        "systemPrompt": system_prompt,
         "stance": r["stance"],
-        "influenceScore": float(r["influence_score"]),
-        "credibilityScore": float(r["credibility_score"]),
+        "influenceScore": _float_col(r, "influence_score", 0.5),
+        "credibilityScore": cred,
         "beliefState": bs,
-        "confidenceLevel": float(r["confidence_level"]),
-        "activityLevel": float(r["activity_level"]),
+        "confidenceLevel": _float_col(r, "confidence_level", 0.5),
+        "activityLevel": act,
         "groupId": r["group_id"],
         "simulationId": r["simulation_id"],
         "createdAt": _dt(r["created_at"]),

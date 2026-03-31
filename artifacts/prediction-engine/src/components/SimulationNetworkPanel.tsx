@@ -1,4 +1,11 @@
-import { memo, useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Background,
@@ -269,9 +276,9 @@ function layoutGraphForce(
     data: {
       agentId: node.id,
       label: node.name,
-      stance: node.stance,
-      policySupport: node.policySupport,
-      influenceScore: node.influenceScore,
+      stance: node.stance ?? "neutral",
+      policySupport: node.policySupport ?? 0,
+      influenceScore: node.influenceScore ?? 0,
     } satisfies AgentNodeData,
   }));
 }
@@ -616,6 +623,92 @@ function GraphToolbarControls({ onFitView }: { onFitView: () => void }) {
 
 /* ─── Inspector Panel ─── */
 
+const inspectorSectionTitleStyle: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 600,
+  color: "#64748b",
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  marginBottom: 8,
+};
+
+const msgBodyStyleBase: CSSProperties = {
+  fontSize: 12,
+  color: "#e2e8f0",
+  lineHeight: 1.55,
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+};
+
+function coerceSimulationGraphNode(n: SimulationGraphNode): SimulationGraphNode {
+  const rawBs = n.beliefState;
+  const policyFromTop = n.policySupport;
+  const policyFromNested = rawBs?.policySupport;
+  const policy =
+    typeof policyFromTop === "number"
+      ? policyFromTop
+      : typeof policyFromNested === "number"
+        ? policyFromNested
+        : 0;
+  return {
+    ...n,
+    name: n.name ?? "Unknown",
+    stance: n.stance ?? "neutral",
+    influenceScore: typeof n.influenceScore === "number" ? n.influenceScore : 0,
+    policySupport: policy,
+    confidenceLevel: typeof n.confidenceLevel === "number" ? n.confidenceLevel : 0,
+    age: typeof n.age === "number" ? n.age : 0,
+    gender: n.gender ?? "—",
+    region: n.region ?? "—",
+    occupation: n.occupation ?? "—",
+    persona: n.persona ?? "",
+    credibilityScore: typeof n.credibilityScore === "number" ? n.credibilityScore : 0,
+    activityLevel: typeof n.activityLevel === "number" ? n.activityLevel : 0,
+    beliefState: {
+      policySupport: typeof rawBs?.policySupport === "number" ? rawBs.policySupport : policy,
+      trustInGovernment:
+        typeof rawBs?.trustInGovernment === "number" ? rawBs.trustInGovernment : 0,
+      economicOutlook: typeof rawBs?.economicOutlook === "number" ? rawBs.economicOutlook : 0,
+    },
+  };
+}
+
+function InspectorScrollableText({
+  title,
+  text,
+  emptyLabel,
+  maxHeight = 200,
+}: {
+  title: string;
+  text: string | null | undefined;
+  emptyLabel?: string;
+  maxHeight?: number;
+}) {
+  const trimmed = (text ?? "").trim();
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={inspectorSectionTitleStyle}>{title}</div>
+      {!trimmed ? (
+        <div style={{ fontSize: 12, color: "#64748b" }}>{emptyLabel ?? "—"}</div>
+      ) : (
+        <div
+          style={{
+            ...msgBodyStyleBase,
+            maxHeight,
+            overflowY: "auto",
+            padding: "10px 12px",
+            background: "rgba(30, 41, 59, 0.55)",
+            borderRadius: 10,
+            border: "1px solid rgba(51, 65, 85, 0.5)",
+          }}
+        >
+          {trimmed}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InspectorPanel({
   selected,
   outgoing,
@@ -633,22 +726,29 @@ function InspectorPanel({
   allNodes: SimulationGraphNode[];
   onClose: () => void;
 }) {
-  const cfg = stanceConfig[selected.stance] ?? stanceConfig.neutral;
+  const sel = useMemo(() => coerceSimulationGraphNode(selected), [selected]);
+  const cfg = stanceConfig[sel.stance] ?? stanceConfig.neutral;
   const postThreads = useMemo(
-    () => buildAgentPostThreads(selected.id, posts, comments),
-    [selected.id, posts, comments],
+    () => buildAgentPostThreads(sel.id, posts, comments),
+    [sel.id, posts, comments],
   );
   const repliesOnOthersPosts = useMemo(
-    () => buildAgentRepliesOnOthersPosts(selected.id, posts, comments),
-    [selected.id, posts, comments],
+    () => buildAgentRepliesOnOthersPosts(sel.id, posts, comments),
+    [sel.id, posts, comments],
   );
-  const msgBodyStyle: CSSProperties = {
-    fontSize: 12,
-    color: "#e2e8f0",
-    lineHeight: 1.55,
-    whiteSpace: "pre-wrap",
-    wordBreak: "break-word",
-  };
+  const [systemPromptExpanded, setSystemPromptExpanded] = useState(false);
+  const systemPromptText = (sel.systemPrompt ?? "").trim();
+  const systemPromptLong = systemPromptText.length > 500;
+  const systemPromptShown =
+    systemPromptLong && !systemPromptExpanded
+      ? `${systemPromptText.slice(0, 500)}…`
+      : systemPromptText;
+  const bs = sel.beliefState;
+
+  useEffect(() => {
+    setSystemPromptExpanded(false);
+  }, [sel.id]);
+
   return (
     <div className="graph-db-inspector">
       <div
@@ -677,7 +777,7 @@ function InspectorPanel({
               boxShadow: `0 0 16px ${cfg.glow}`,
             }}
           >
-            {selected.name
+            {sel.name
               .split(/\s+/)
               .map((w) => w[0])
               .join("")
@@ -685,8 +785,8 @@ function InspectorPanel({
               .slice(0, 2)}
           </div>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0" }}>{selected.name}</div>
-            <div style={{ fontSize: 11, color: "#64748b" }}>Agent #{selected.id}</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0" }}>{sel.name}</div>
+            <div style={{ fontSize: 11, color: "#64748b" }}>Agent #{sel.id}</div>
           </div>
         </div>
         <button
@@ -706,12 +806,16 @@ function InspectorPanel({
       </div>
 
       <div style={{ padding: "16px 20px" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 16 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
           {[
-            { label: "Stance", value: selected.stance, color: cfg.color, capitalize: true },
-            { label: "Influence", value: formatScore(selected.influenceScore), mono: true },
-            { label: "Policy Support", value: formatScore(selected.policySupport), mono: true },
-            { label: "Confidence", value: formatScore(selected.confidenceLevel), mono: true },
+            { label: "Stance", value: sel.stance, color: cfg.color, capitalize: true },
+            { label: "Influence", value: formatScore(sel.influenceScore), mono: true },
+            { label: "Policy support", value: formatScore(sel.policySupport), mono: true },
+            { label: "Confidence", value: formatScore(sel.confidenceLevel), mono: true },
+            { label: "Credibility", value: formatScore(sel.credibilityScore), mono: true },
+            { label: "Activity", value: formatScore(sel.activityLevel), mono: true },
+            { label: "Trust (gov)", value: formatScore(bs.trustInGovernment), mono: true },
+            { label: "Econ outlook", value: formatScore(bs.economicOutlook), mono: true },
           ].map((item) => (
             <div
               key={item.label}
@@ -746,6 +850,133 @@ function InspectorPanel({
               </div>
             </div>
           ))}
+        </div>
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={inspectorSectionTitleStyle}>Profile</div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 8,
+              fontSize: 12,
+              color: "#cbd5e1",
+            }}
+          >
+            <div
+              style={{
+                background: "rgba(30, 41, 59, 0.45)",
+                borderRadius: 8,
+                padding: "8px 10px",
+                border: "1px solid rgba(51, 65, 85, 0.45)",
+              }}
+            >
+              <span style={{ color: "#64748b", fontSize: 10, display: "block", marginBottom: 2 }}>
+                Age
+              </span>
+              {sel.age}
+            </div>
+            <div
+              style={{
+                background: "rgba(30, 41, 59, 0.45)",
+                borderRadius: 8,
+                padding: "8px 10px",
+                border: "1px solid rgba(51, 65, 85, 0.45)",
+              }}
+            >
+              <span style={{ color: "#64748b", fontSize: 10, display: "block", marginBottom: 2 }}>
+                Gender
+              </span>
+              <span style={{ textTransform: "capitalize" }}>{sel.gender}</span>
+            </div>
+            <div
+              style={{
+                gridColumn: "1 / -1",
+                background: "rgba(30, 41, 59, 0.45)",
+                borderRadius: 8,
+                padding: "8px 10px",
+                border: "1px solid rgba(51, 65, 85, 0.45)",
+              }}
+            >
+              <span style={{ color: "#64748b", fontSize: 10, display: "block", marginBottom: 2 }}>
+                Region
+              </span>
+              {sel.region}
+            </div>
+            <div
+              style={{
+                gridColumn: "1 / -1",
+                background: "rgba(30, 41, 59, 0.45)",
+                borderRadius: 8,
+                padding: "8px 10px",
+                border: "1px solid rgba(51, 65, 85, 0.45)",
+              }}
+            >
+              <span style={{ color: "#64748b", fontSize: 10, display: "block", marginBottom: 2 }}>
+                Occupation
+              </span>
+              {sel.occupation}
+            </div>
+            {sel.groupId != null && (
+              <div
+                style={{
+                  gridColumn: "1 / -1",
+                  background: "rgba(30, 41, 59, 0.35)",
+                  borderRadius: 8,
+                  padding: "8px 10px",
+                  border: "1px solid rgba(99, 102, 241, 0.2)",
+                  fontFamily: "ui-monospace, monospace",
+                  fontSize: 11,
+                  color: "#a5b4fc",
+                }}
+              >
+                Agent pool group id: {sel.groupId}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <InspectorScrollableText title="Persona" text={sel.persona} maxHeight={160} />
+
+        <div style={{ marginBottom: 16 }}>
+          <div style={inspectorSectionTitleStyle}>Behavioral instructions (system prompt)</div>
+          {!systemPromptText ? (
+            <div style={{ fontSize: 12, color: "#64748b" }}>No custom system prompt stored.</div>
+          ) : (
+            <>
+              <div
+                style={{
+                  ...msgBodyStyleBase,
+                  maxHeight: systemPromptExpanded ? 320 : undefined,
+                  overflowY: systemPromptExpanded ? "auto" : undefined,
+                  padding: "10px 12px",
+                  background: "rgba(30, 41, 59, 0.55)",
+                  borderRadius: 10,
+                  border: "1px solid rgba(51, 65, 85, 0.5)",
+                }}
+              >
+                {systemPromptShown}
+              </div>
+              {systemPromptLong && (
+                <button
+                  type="button"
+                  onClick={() => setSystemPromptExpanded((v) => !v)}
+                  style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    color: "#818cf8",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    padding: 0,
+                  }}
+                >
+                  {systemPromptExpanded ? "Show less" : "Show full prompt"}
+                </button>
+              )}
+            </>
+          )}
         </div>
 
         {[
@@ -902,10 +1133,10 @@ function InspectorPanel({
                             fontWeight: 600,
                           }}
                         >
-                          {selected.name} · posted · round {post.round} · sent{" "}
+                          {sel.name} · posted · round {post.round} · sent{" "}
                           {formatScore(post.sentiment)}
                         </div>
-                        <div style={msgBodyStyle}>{post.content}</div>
+                        <div style={msgBodyStyleBase}>{post.content}</div>
                         {replies.length > 0 ? (
                           <div
                             style={{
@@ -928,7 +1159,7 @@ function InspectorPanel({
                             </div>
                             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                               {replies.map((c) => {
-                                const isSelf = c.agentId === selected.id;
+                                const isSelf = c.agentId === sel.id;
                                 return (
                                   <div
                                     key={c.id}
@@ -947,10 +1178,10 @@ function InspectorPanel({
                                         fontFamily: "ui-monospace, monospace",
                                       }}
                                     >
-                                      {isSelf ? `${selected.name} (reply)` : c.agentName} · round{" "}
+                                      {isSelf ? `${sel.name} (reply)` : c.agentName} · round{" "}
                                       {c.round} · sent {formatScore(c.sentiment)}
                                     </div>
-                                    <div style={{ ...msgBodyStyle, fontSize: 11, color: "#cbd5e1" }}>
+                                    <div style={{ ...msgBodyStyleBase, fontSize: 11, color: "#cbd5e1" }}>
                                       {c.content}
                                     </div>
                                   </div>
@@ -1012,7 +1243,7 @@ function InspectorPanel({
                         >
                           Original — {parentPost.agentName} · round {parentPost.round}
                         </div>
-                        <div style={{ ...msgBodyStyle, fontSize: 11, color: "#94a3b8" }}>
+                        <div style={{ ...msgBodyStyleBase, fontSize: 11, color: "#94a3b8" }}>
                           {parentPost.content}
                         </div>
                         <div
@@ -1031,10 +1262,10 @@ function InspectorPanel({
                               fontWeight: 600,
                             }}
                           >
-                            {selected.name} replied · round {comment.round} · sent{" "}
+                            {sel.name} replied · round {comment.round} · sent{" "}
                             {formatScore(comment.sentiment)}
                           </div>
-                          <div style={msgBodyStyle}>{comment.content}</div>
+                          <div style={msgBodyStyleBase}>{comment.content}</div>
                         </div>
                       </div>
                     ))}

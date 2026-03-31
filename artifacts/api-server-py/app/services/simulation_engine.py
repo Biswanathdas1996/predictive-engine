@@ -22,12 +22,14 @@ import asyncpg
 
 from app import config
 from app.db import pool
+from app.serialize import normalize_belief_state_json
 from app.services import llm_service
 from app.services import neo4j_service
 from app.services.prompt_templates import (
     build_agent_action_prompt,
     build_agent_reaction_prompt,
     build_graph_context_summary,
+    build_orchestrator_prompt,
 )
 
 logger = logging.getLogger(__name__)
@@ -181,9 +183,7 @@ def generate_deterministic_reaction(
 
 
 def _to_agent_row(agent: asyncpg.Record) -> AgentRow:
-    bs = agent["belief_state"]
-    if isinstance(bs, str):
-        bs = json.loads(bs)
+    bs = normalize_belief_state_json(agent["belief_state"])
     sp_raw = agent.get("system_prompt")
     sp: str | None
     if isinstance(sp_raw, str) and sp_raw.strip():
@@ -225,6 +225,32 @@ def _persona_dict_for_prompt(ar: AgentRow) -> dict[str, Any]:
     return d
 
 
+def _parse_target_post_id(raw: Any) -> int | None:
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _resolve_comment_post_id(
+    target_post_id: int | None,
+    round_posts: list[dict[str, Any]],
+    prior_feed_ids: list[int],
+) -> int | None:
+    """Pick a post_id for a comment: prefer LLM id if valid, else same-round then feed."""
+    round_ids = [int(p["id"]) for p in round_posts]
+    valid = frozenset(round_ids) | frozenset(prior_feed_ids)
+    if target_post_id is not None and target_post_id in valid:
+        return target_post_id
+    if round_ids:
+        return random.choice(round_ids)
+    if prior_feed_ids:
+        return random.choice(prior_feed_ids)
+    return None
+
+
 async def generate_llm_action(
     agent: AgentRow,
     round_num: int,
@@ -233,7 +259,12 @@ async def generate_llm_action(
     event: str | None = None,
     policy_brief: str | None = None,
     llm_only: bool = False,
-) -> tuple[Literal["post", "comment", "ignore"], str, float]:
+    round_mode: int = 0,
+    target_post: dict[str, Any] | None = None,
+    target_comment: dict[str, Any] | None = None,
+    peer_highlights: list[str] | None = None,
+    directive: str | None = None,
+) -> tuple[Literal["post", "comment", "ignore"], str, float, int | None]:
     graph_summary = build_graph_context_summary(neighbors, recent_posts)
     ctx: dict[str, Any] = {
         "persona": _persona_dict_for_prompt(agent),
@@ -245,6 +276,16 @@ async def generate_llm_action(
         ctx["event"] = event
     if policy_brief:
         ctx["policyBrief"] = policy_brief
+    if round_mode:
+        ctx["roundMode"] = round_mode
+    if target_post is not None:
+        ctx["targetPost"] = target_post
+    if target_comment is not None:
+        ctx["targetComment"] = target_comment
+    if peer_highlights:
+        ctx["peerHighlights"] = peer_highlights
+    if directive:
+        ctx["orchestratorDirective"] = directive
     prompt = build_agent_action_prompt(ctx)
     result = await llm_service.generate_agent_action(prompt)
     if result and result.get("action"):
@@ -255,6 +296,7 @@ async def generate_llm_action(
             cast(Literal["post", "comment", "ignore"], act),
             str(result.get("content") or ""),
             float(result.get("sentiment", 0)),
+            _parse_target_post_id(result.get("target_post_id")),
         )
     if llm_only:
         raise ValueError(
@@ -262,7 +304,7 @@ async def generate_llm_action(
             "Retry the round or check GenAI logs."
         )
     a, c, s = generate_deterministic_action(agent, round_num)
-    return a, c, s
+    return a, c, s, None
 
 
 async def _reaction_content_and_sentiment(
@@ -383,6 +425,7 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                 )
 
             new_round = sim["current_round"] + 1
+            round_mode = ((new_round - 1) % 4) + 1
             cfg = sim["config"]
             if isinstance(cfg, str):
                 cfg = json.loads(cfg)
@@ -421,18 +464,42 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
             recent_posts: list[dict[str, Any]] = []
             posts = await conn.fetch(
                 """SELECT * FROM posts WHERE simulation_id = $1
-                   ORDER BY created_at DESC LIMIT 10""",
+                   ORDER BY created_at DESC LIMIT 20""",
                 simulation_id,
             )
             agent_map = {a["id"]: a["name"] for a in agents}
             for p_row in reversed(list(posts)):
                 recent_posts.append(
                     {
+                        "id": int(p_row["id"]),
+                        "agentId": int(p_row["agent_id"]),
                         "agentName": agent_map.get(p_row["agent_id"], "Unknown"),
                         "content": p_row["content"],
                         "sentiment": float(p_row["sentiment"]),
                     }
                 )
+
+            # Fetch recent comments for round 3/4 targeted interaction
+            recent_comments_rows = await conn.fetch(
+                """SELECT c.id, c.post_id, c.agent_id, c.content, c.sentiment
+                   FROM comments c
+                   WHERE c.simulation_id = $1
+                   ORDER BY c.created_at DESC LIMIT 50""",
+                simulation_id,
+            )
+            comments_by_post: dict[int, list[dict[str, Any]]] = {}
+            for cr in recent_comments_rows:
+                pid = int(cr["post_id"])
+                comments_by_post.setdefault(pid, []).append({
+                    "id": int(cr["id"]),
+                    "post_id": pid,
+                    "agentId": int(cr["agent_id"]),
+                    "agentName": agent_map.get(cr["agent_id"], "Unknown"),
+                    "content": cr["content"],
+                    "sentiment": float(cr["sentiment"]),
+                })
+
+            prior_feed_ids = [int(p["id"]) for p in recent_posts if p.get("id") is not None]
 
             # ── Phase 2: Belief propagation + LLM generation (no DB needed) ──
             agents_by_id = {a["id"]: a for a in agents}
@@ -464,29 +531,171 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                         ar["confidenceLevel"] = upd["confidenceLevel"]
                         beliefs_updated += 1
 
+            # ── Orchestrator: LLM plans the round ────────────────────────────
+            orch_agents = [
+                {
+                    "id": a["id"],
+                    "name": agent_rows[a["id"]]["name"],
+                    "age": agent_rows[a["id"]]["age"],
+                    "occupation": agent_rows[a["id"]]["occupation"],
+                    "region": agent_rows[a["id"]]["region"],
+                    "stance": agent_rows[a["id"]]["stance"],
+                    "persona": agent_rows[a["id"]]["persona"],
+                    "beliefState": agent_rows[a["id"]]["beliefState"],
+                }
+                for a in agents
+            ]
+            orch_prompt = build_orchestrator_prompt(
+                orch_agents, recent_posts, comments_by_post,
+                round_mode, new_round, policy_brief,
+            )
+            orchestrator_plan: dict[int, dict[str, Any]] = {}
+            try:
+                plan_list = await llm_service.generate_orchestrator_plan(orch_prompt)
+                if plan_list:
+                    for entry in plan_list:
+                        aid = entry.get("agent_id")
+                        if aid is not None:
+                            orchestrator_plan[int(aid)] = entry
+                    logger.info(
+                        "Orchestrator planned %d/%d agents for round %d",
+                        len(orchestrator_plan), len(agents), new_round,
+                    )
+            except Exception as exc:
+                logger.warning("Orchestrator plan failed — using default targeting: %s", exc)
+
             # Content generation (LLM only — parallel, no DB connection held)
             async def _gen_action(agent: Any) -> dict[str, Any]:
                 ar = agent_rows[agent["id"]]
-                incoming = [i for i in influences if i["target_agent_id"] == agent["id"]]
-                neighbor_list = []
-                for inf in incoming:
-                    src = agents_by_id.get(inf["source_agent_id"])
-                    if src:
-                        neighbor_list.append({"name": src["name"], "stance": src["stance"]})
-                action, content, sentiment = await generate_llm_action(
+                agent_id = agent["id"]
+
+                # All agents as awareness — no edge-based filtering
+                neighbor_list = [
+                    {"name": other["name"], "stance": other["stance"]}
+                    for other in agents
+                    if other["id"] != agent_id
+                ]
+
+                # Use orchestrator plan if available, else fall back to random targeting
+                plan = orchestrator_plan.get(agent_id)
+                target_post: dict[str, Any] | None = None
+                target_comment: dict[str, Any] | None = None
+                directive: str | None = None
+
+                if plan:
+                    directive = plan.get("directive")
+                    planned_target = plan.get("target_post_id")
+                    if planned_target is not None:
+                        target_post = next(
+                            (p for p in recent_posts if p.get("id") == int(planned_target)),
+                            None,
+                        )
+                    # For round 3 enrich with the comment on own post
+                    if round_mode == 3 and target_post:
+                        pid = target_post.get("id")
+                        if pid and pid in comments_by_post:
+                            other_comments = [
+                                c for c in comments_by_post[pid]
+                                if c["agentId"] != agent_id
+                            ]
+                            if other_comments:
+                                target_comment = random.choice(other_comments)
+                    # For round 4 enrich with a thread comment
+                    if round_mode == 4 and target_post:
+                        pid = target_post.get("id")
+                        if pid and pid in comments_by_post:
+                            target_comment = random.choice(comments_by_post[pid])
+
+                # Fallback: no orchestrator plan for this agent
+                if not plan or (round_mode >= 2 and target_post is None):
+                    if round_mode == 2:
+                        others = [p for p in recent_posts if p.get("agentId") != agent_id]
+                        if others:
+                            target_post = random.choice(others)
+                    elif round_mode == 3:
+                        my_posts = [p for p in recent_posts if p.get("agentId") == agent_id]
+                        found = False
+                        for post in my_posts:
+                            pid = post.get("id")
+                            if pid and pid in comments_by_post:
+                                other_comments = [
+                                    c for c in comments_by_post[pid]
+                                    if c["agentId"] != agent_id
+                                ]
+                                if other_comments:
+                                    target_post = post
+                                    target_comment = random.choice(other_comments)
+                                    found = True
+                                    break
+                        if not found:
+                            others = [p for p in recent_posts if p.get("agentId") != agent_id]
+                            if others:
+                                target_post = random.choice(others)
+                    elif round_mode == 4:
+                        threaded = [
+                            p for p in recent_posts
+                            if p.get("agentId") != agent_id
+                            and p.get("id") in comments_by_post
+                        ]
+                        if threaded:
+                            target_post = random.choice(threaded)
+                            target_comment = random.choice(comments_by_post[target_post["id"]])
+                        else:
+                            others = [p for p in recent_posts if p.get("agentId") != agent_id]
+                            if others:
+                                target_post = random.choice(others)
+
+                # Peer highlights — thematically similar posts from other agents
+                agent_sentiment = ar["beliefState"]["policySupport"]
+                peer_highlights: list[str] = []
+                for p in recent_posts:
+                    if p.get("agentId") != agent_id and p.get("content"):
+                        if abs(p["sentiment"] - agent_sentiment) < 0.4:
+                            peer_highlights.append(
+                                f'{p["agentName"]}: "{p["content"][:100]}"'
+                            )
+                    if len(peer_highlights) >= 2:
+                        break
+
+                action, content, sentiment, target_post_id = await generate_llm_action(
                     ar,
                     new_round,
                     recent_posts,
                     neighbor_list,
                     policy_brief=policy_brief,
                     llm_only=True,
+                    round_mode=round_mode,
+                    target_post=target_post,
+                    target_comment=target_comment,
+                    peer_highlights=peer_highlights if peer_highlights else None,
+                    directive=directive,
                 )
+
+                # Hard-enforce: only round 1 may post; all later rounds are comments.
+                if round_mode == 1:
+                    action = "post"
+                    target_post_id = None
+                else:
+                    # Force comment regardless of what the LLM returned.
+                    action = "comment"
+                    if target_post is not None and not target_post_id:
+                        target_post_id = target_post.get("id")
+                    # Last-resort: pick any post not authored by this agent
+                    if not target_post_id:
+                        fallback = next(
+                            (p for p in recent_posts if p.get("agentId") != agent_id),
+                            None,
+                        )
+                        if fallback:
+                            target_post_id = fallback.get("id")
+
                 return {
-                    "agentId": agent["id"],
+                    "agentId": agent_id,
                     "name": agent["name"],
                     "action": action,
                     "content": content,
                     "sentiment": sentiment,
+                    "targetPostId": target_post_id,
                     "agentRow": ar,
                 }
 
@@ -528,36 +737,42 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                                 "content": content,
                                 "sentiment": sentiment,
                                 "agentId": aa["agentId"],
+                                "agentName": aa["name"],
                             })
                             posts_generated += 1
-                        elif action == "comment" and round_posts:
-                            target = random.choice(round_posts)
-                            await conn.fetchrow(
-                                """INSERT INTO comments
-                                (content, sentiment, round, agent_id, post_id, simulation_id)
-                                VALUES ($1, $2, $3, $4, $5, $6)
-                                RETURNING *""",
-                                content, sentiment, new_round,
-                                aa["agentId"], target["id"], simulation_id,
+                        elif action == "comment":
+                            comment_post_id = _resolve_comment_post_id(
+                                aa.get("targetPostId"),
+                                round_posts,
+                                prior_feed_ids,
                             )
-                            posts_generated += 1
-                        else:
-                            # Wanted to comment but no posts yet — create as post
-                            post = await conn.fetchrow(
-                                """INSERT INTO posts
-                                (content, sentiment, platform, topic_tags, round, agent_id, simulation_id)
-                                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                                RETURNING *""",
-                                content, sentiment, "simulation", tags,
-                                new_round, aa["agentId"], simulation_id,
-                            )
-                            round_posts.append({
-                                "id": post["id"],
-                                "content": content,
-                                "sentiment": sentiment,
-                                "agentId": aa["agentId"],
-                            })
-                            posts_generated += 1
+                            if comment_post_id is not None:
+                                await conn.fetchrow(
+                                    """INSERT INTO comments
+                                    (content, sentiment, round, agent_id, post_id, simulation_id)
+                                    VALUES ($1, $2, $3, $4, $5, $6)
+                                    RETURNING *""",
+                                    content, sentiment, new_round,
+                                    aa["agentId"], comment_post_id, simulation_id,
+                                )
+                                posts_generated += 1
+                            else:
+                                post = await conn.fetchrow(
+                                    """INSERT INTO posts
+                                    (content, sentiment, platform, topic_tags, round, agent_id, simulation_id)
+                                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                    RETURNING *""",
+                                    content, sentiment, "simulation", tags,
+                                    new_round, aa["agentId"], simulation_id,
+                                )
+                                round_posts.append({
+                                    "id": post["id"],
+                                    "content": content,
+                                    "sentiment": sentiment,
+                                    "agentId": aa["agentId"],
+                                    "agentName": aa["name"],
+                                })
+                                posts_generated += 1
 
                     # Update agent belief state
                     await conn.execute(
@@ -595,6 +810,10 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                     target_post = random.choice(round_posts)
                     rp_ctx: dict[str, Any] = {
                         "postContent": target_post["content"],
+                        "postAuthor": target_post.get(
+                            "agentName",
+                            agent_map.get(target_post["agentId"], "Unknown"),
+                        ),
                         "persona": _persona_dict_for_prompt(ar),
                         "beliefState": ar["beliefState"],
                     }
@@ -755,6 +974,9 @@ async def run_simulation_round_stream(
                 )
 
             new_round = sim["current_round"] + 1
+            # Round 1 is always independent posts; every round after that is
+            # discussion-only, cycling through modes 2 → 3 → 4 → 2 → …
+            round_mode = 1 if new_round == 1 else ((new_round - 2) % 3) + 2
             cfg = sim["config"]
             if isinstance(cfg, str):
                 cfg = json.loads(cfg)
@@ -817,16 +1039,40 @@ async def run_simulation_round_stream(
             recent_posts: list[dict[str, Any]] = []
             posts = await conn.fetch(
                 """SELECT * FROM posts WHERE simulation_id = $1
-                   ORDER BY created_at DESC LIMIT 10""",
+                   ORDER BY created_at DESC LIMIT 20""",
                 simulation_id,
             )
             agent_map = {a["id"]: a["name"] for a in agents}
             for p_row in reversed(list(posts)):
                 recent_posts.append({
+                    "id": int(p_row["id"]),
+                    "agentId": int(p_row["agent_id"]),
                     "agentName": agent_map.get(p_row["agent_id"], "Unknown"),
                     "content": p_row["content"],
                     "sentiment": float(p_row["sentiment"]),
                 })
+
+            # Fetch recent comments for round 3/4 targeted interaction
+            recent_comments_rows = await conn.fetch(
+                """SELECT c.id, c.post_id, c.agent_id, c.content, c.sentiment
+                   FROM comments c
+                   WHERE c.simulation_id = $1
+                   ORDER BY c.created_at DESC LIMIT 50""",
+                simulation_id,
+            )
+            comments_by_post: dict[int, list[dict[str, Any]]] = {}
+            for cr in recent_comments_rows:
+                pid = int(cr["post_id"])
+                comments_by_post.setdefault(pid, []).append({
+                    "id": int(cr["id"]),
+                    "post_id": pid,
+                    "agentId": int(cr["agent_id"]),
+                    "agentName": agent_map.get(cr["agent_id"], "Unknown"),
+                    "content": cr["content"],
+                    "sentiment": float(cr["sentiment"]),
+                })
+
+            prior_feed_ids = [int(p["id"]) for p in recent_posts if p.get("id") is not None]
 
             # Belief propagation
             yield {"type": "status", "phase": "beliefs", "message": "Propagating beliefs through influence network..."}
@@ -867,6 +1113,44 @@ async def run_simulation_round_stream(
                         "total": n_agents,
                     }
 
+            # ── Orchestrator: LLM plans the round ────────────────────────────
+            yield {
+                "type": "status",
+                "phase": "orchestrator",
+                "message": f"Orchestrator planning round {new_round} (mode {round_mode})...",
+            }
+            orch_agents = [
+                {
+                    "id": a["id"],
+                    "name": agent_rows[a["id"]]["name"],
+                    "age": agent_rows[a["id"]]["age"],
+                    "occupation": agent_rows[a["id"]]["occupation"],
+                    "region": agent_rows[a["id"]]["region"],
+                    "stance": agent_rows[a["id"]]["stance"],
+                    "persona": agent_rows[a["id"]]["persona"],
+                    "beliefState": agent_rows[a["id"]]["beliefState"],
+                }
+                for a in agents
+            ]
+            orch_prompt = build_orchestrator_prompt(
+                orch_agents, recent_posts, comments_by_post,
+                round_mode, new_round, policy_brief,
+            )
+            orchestrator_plan: dict[int, dict[str, Any]] = {}
+            try:
+                plan_list = await llm_service.generate_orchestrator_plan(orch_prompt)
+                if plan_list:
+                    for entry in plan_list:
+                        aid = entry.get("agent_id")
+                        if aid is not None:
+                            orchestrator_plan[int(aid)] = entry
+                    logger.info(
+                        "Orchestrator planned %d/%d agents for round %d",
+                        len(orchestrator_plan), len(agents), new_round,
+                    )
+            except Exception as exc:
+                logger.warning("Orchestrator plan failed — using default targeting: %s", exc)
+
             # Content generation (LLM only, same order as agents)
             yield {
                 "type": "status",
@@ -878,30 +1162,133 @@ async def run_simulation_round_stream(
 
             async def _stream_gen_one(agent: Any) -> dict[str, Any]:
                 ar = agent_rows[agent["id"]]
-                incoming = [
-                    i for i in influences if i["target_agent_id"] == agent["id"]
+                agent_id = agent["id"]
+
+                # All agents as awareness — no edge-based filtering
+                neighbor_list = [
+                    {"name": other["name"], "stance": other["stance"]}
+                    for other in agents
+                    if other["id"] != agent_id
                 ]
-                neighbor_list = []
-                for inf in incoming:
-                    src = agents_by_id.get(inf["source_agent_id"])
-                    if src:
-                        neighbor_list.append(
-                            {"name": src["name"], "stance": src["stance"]}
+
+                # Use orchestrator plan if available, else fall back to random targeting
+                plan = orchestrator_plan.get(agent_id)
+                target_post: dict[str, Any] | None = None
+                target_comment: dict[str, Any] | None = None
+                directive: str | None = None
+
+                if plan:
+                    directive = plan.get("directive")
+                    planned_target = plan.get("target_post_id")
+                    if planned_target is not None:
+                        target_post = next(
+                            (p for p in recent_posts if p.get("id") == int(planned_target)),
+                            None,
                         )
-                action, content, sentiment = await generate_llm_action(
+                    if round_mode == 3 and target_post:
+                        pid = target_post.get("id")
+                        if pid and pid in comments_by_post:
+                            other_comments = [
+                                c for c in comments_by_post[pid]
+                                if c["agentId"] != agent_id
+                            ]
+                            if other_comments:
+                                target_comment = random.choice(other_comments)
+                    if round_mode == 4 and target_post:
+                        pid = target_post.get("id")
+                        if pid and pid in comments_by_post:
+                            target_comment = random.choice(comments_by_post[pid])
+
+                # Fallback: no orchestrator plan for this agent
+                if not plan or (round_mode >= 2 and target_post is None):
+                    if round_mode == 2:
+                        others = [p for p in recent_posts if p.get("agentId") != agent_id]
+                        if others:
+                            target_post = random.choice(others)
+                    elif round_mode == 3:
+                        my_posts = [p for p in recent_posts if p.get("agentId") == agent_id]
+                        found = False
+                        for post in my_posts:
+                            pid = post.get("id")
+                            if pid and pid in comments_by_post:
+                                other_comments = [
+                                    c for c in comments_by_post[pid]
+                                    if c["agentId"] != agent_id
+                                ]
+                                if other_comments:
+                                    target_post = post
+                                    target_comment = random.choice(other_comments)
+                                    found = True
+                                    break
+                        if not found:
+                            others = [p for p in recent_posts if p.get("agentId") != agent_id]
+                            if others:
+                                target_post = random.choice(others)
+                    elif round_mode == 4:
+                        threaded = [
+                            p for p in recent_posts
+                            if p.get("agentId") != agent_id
+                            and p.get("id") in comments_by_post
+                        ]
+                        if threaded:
+                            target_post = random.choice(threaded)
+                            target_comment = random.choice(comments_by_post[target_post["id"]])
+                        else:
+                            others = [p for p in recent_posts if p.get("agentId") != agent_id]
+                            if others:
+                                target_post = random.choice(others)
+
+                # Peer highlights
+                agent_sentiment = ar["beliefState"]["policySupport"]
+                peer_highlights: list[str] = []
+                for p in recent_posts:
+                    if p.get("agentId") != agent_id and p.get("content"):
+                        if abs(p["sentiment"] - agent_sentiment) < 0.4:
+                            peer_highlights.append(
+                                f'{p["agentName"]}: "{p["content"][:100]}"'
+                            )
+                    if len(peer_highlights) >= 2:
+                        break
+
+                action, content, sentiment, target_post_id = await generate_llm_action(
                     ar,
                     new_round,
                     recent_posts,
                     neighbor_list,
                     policy_brief=policy_brief,
                     llm_only=True,
+                    round_mode=round_mode,
+                    target_post=target_post,
+                    target_comment=target_comment,
+                    peer_highlights=peer_highlights if peer_highlights else None,
+                    directive=directive,
                 )
+
+                # Hard-enforce: only round 1 may post; all later rounds are comments.
+                if round_mode == 1:
+                    action = "post"
+                    target_post_id = None
+                else:
+                    # Force comment regardless of what the LLM returned.
+                    action = "comment"
+                    if target_post is not None and not target_post_id:
+                        target_post_id = target_post.get("id")
+                    # Last-resort: pick any post not authored by this agent
+                    if not target_post_id:
+                        fallback = next(
+                            (p for p in recent_posts if p.get("agentId") != agent_id),
+                            None,
+                        )
+                        if fallback:
+                            target_post_id = fallback.get("id")
+
                 return {
-                    "agentId": agent["id"],
+                    "agentId": agent_id,
                     "name": agent["name"],
                     "action": action,
                     "content": content,
                     "sentiment": sentiment,
+                    "targetPostId": target_post_id,
                     "agentRow": ar,
                 }
 
@@ -957,35 +1344,42 @@ async def run_simulation_round_stream(
                                 "content": content,
                                 "sentiment": sentiment,
                                 "agentId": aa["agentId"],
+                                "agentName": aa["name"],
                             })
                             posts_generated += 1
-                        elif action == "comment" and round_posts:
-                            target = random.choice(round_posts)
-                            await conn.fetchrow(
-                                """INSERT INTO comments
-                                (content, sentiment, round, agent_id, post_id, simulation_id)
-                                VALUES ($1, $2, $3, $4, $5, $6)
-                                RETURNING *""",
-                                content, sentiment, new_round,
-                                aa["agentId"], target["id"], simulation_id,
+                        elif action == "comment":
+                            comment_post_id = _resolve_comment_post_id(
+                                aa.get("targetPostId"),
+                                round_posts,
+                                prior_feed_ids,
                             )
-                            posts_generated += 1
-                        else:
-                            post = await conn.fetchrow(
-                                """INSERT INTO posts
-                                (content, sentiment, platform, topic_tags, round, agent_id, simulation_id)
-                                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                                RETURNING *""",
-                                content, sentiment, "simulation", tags,
-                                new_round, aa["agentId"], simulation_id,
-                            )
-                            round_posts.append({
-                                "id": post["id"],
-                                "content": content,
-                                "sentiment": sentiment,
-                                "agentId": aa["agentId"],
-                            })
-                            posts_generated += 1
+                            if comment_post_id is not None:
+                                await conn.fetchrow(
+                                    """INSERT INTO comments
+                                    (content, sentiment, round, agent_id, post_id, simulation_id)
+                                    VALUES ($1, $2, $3, $4, $5, $6)
+                                    RETURNING *""",
+                                    content, sentiment, new_round,
+                                    aa["agentId"], comment_post_id, simulation_id,
+                                )
+                                posts_generated += 1
+                            else:
+                                post = await conn.fetchrow(
+                                    """INSERT INTO posts
+                                    (content, sentiment, platform, topic_tags, round, agent_id, simulation_id)
+                                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                    RETURNING *""",
+                                    content, sentiment, "simulation", tags,
+                                    new_round, aa["agentId"], simulation_id,
+                                )
+                                round_posts.append({
+                                    "id": post["id"],
+                                    "content": content,
+                                    "sentiment": sentiment,
+                                    "agentId": aa["agentId"],
+                                    "agentName": aa["name"],
+                                })
+                                posts_generated += 1
 
                     await conn.execute(
                         """UPDATE agents SET belief_state = $1::jsonb, confidence_level = $2
@@ -1022,6 +1416,10 @@ async def run_simulation_round_stream(
                     target_post = random.choice(round_posts)
                     rp_ctx_s: dict[str, Any] = {
                         "postContent": target_post["content"],
+                        "postAuthor": target_post.get(
+                            "agentName",
+                            agent_map.get(target_post["agentId"], "Unknown"),
+                        ),
                         "persona": _persona_dict_for_prompt(ar),
                         "beliefState": ar["beliefState"],
                     }

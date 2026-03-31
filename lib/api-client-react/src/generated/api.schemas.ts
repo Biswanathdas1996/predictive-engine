@@ -273,6 +273,23 @@ export interface CreateGroupBody {
   description: string;
 }
 
+export interface SuggestGroupCohortFieldsBody {
+  name: string;
+  description?: string;
+}
+
+export interface SuggestGroupCohortFieldsResponse {
+  description: string;
+  /**
+   * @minimum 1
+   * @maximum 500
+   */
+  agentCount: number;
+  demographics: string;
+  community: string;
+  educationProfession: string;
+}
+
 export interface MonteCarloConfig {
   numRuns: number;
   roundsPerRun: number;
