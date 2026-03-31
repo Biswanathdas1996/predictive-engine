@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -53,12 +53,24 @@ class SimulationConfigIn(BaseModel):
 
 
 class PatchSimulationConfigRequest(BaseModel):
-    """Merge into simulation.config — currently only eventIds is supported."""
+    """Partial merge into simulation.config — provide eventIds and/or numRounds."""
 
-    eventIds: list[int] = Field(
-        default_factory=list,
-        description="Global catalog event IDs to attach to this run (replaces previous eventIds).",
+    eventIds: list[int] | None = Field(
+        default=None,
+        description="When set, replaces config.eventIds (global catalog IDs only).",
     )
+    numRounds: int | None = Field(
+        default=None,
+        ge=1,
+        le=1000,
+        description="Planned total rounds; must be >= current_round.",
+    )
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> "PatchSimulationConfigRequest":
+        if self.eventIds is None and self.numRounds is None:
+            raise ValueError("Provide at least one of eventIds or numRounds")
+        return self
 
 
 class CreateGroupWithAgentsRequest(BaseModel):

@@ -9,7 +9,18 @@ import {
   type Simulation,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Activity, Plus, Play, Info, Radio, Trash2 } from "lucide-react";
+import {
+  Activity,
+  Plus,
+  Play,
+  Info,
+  Radio,
+  Trash2,
+  ChevronRight,
+  Layers,
+  CheckCircle2,
+  UsersRound,
+} from "lucide-react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
 import { format } from "date-fns";
@@ -23,10 +34,21 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { normalizeApiArray, cn } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 import { consumeSSEStream, type SSEEvent } from "@/lib/sse";
+
+function statusBadgeClass(status: string) {
+  switch (status) {
+    case "running":
+      return "bg-primary/15 text-primary border-primary/30 shadow-[0_0_20px_-8px_var(--color-primary)]";
+    case "completed":
+      return "bg-emerald-500/10 text-emerald-400 border-emerald-500/25";
+    default:
+      return "bg-secondary/80 text-muted-foreground border-border/60";
+  }
+}
 
 export default function Simulations() {
   const queryClient = useQueryClient();
@@ -52,6 +74,14 @@ export default function Simulations() {
   const simulationList = normalizeApiArray<Simulation>(simulations);
   const policyList = normalizeApiArray<Policy>(policies);
   const groupsList = normalizeApiArray<Group>(groupsData);
+
+  const stats = useMemo(() => {
+    const total = simulationList.length;
+    const running = simulationList.filter((s) => s.status === "running").length;
+    const completed = simulationList.filter((s) => s.status === "completed").length;
+    const agents = simulationList.reduce((acc, s) => acc + (s.totalAgents ?? 0), 0);
+    return { total, running, completed, agents };
+  }, [simulationList]);
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [formData, setFormData] = useState({
@@ -187,103 +217,220 @@ export default function Simulations() {
 
   const progressPct = createProgress ? Math.round((createProgress.current / createProgress.total) * 100) : 0;
 
+  const container = {
+    hidden: { opacity: 0 },
+    show: { opacity: 1, transition: { staggerChildren: 0.06 } },
+  };
+  const item = {
+    hidden: { opacity: 0, y: 16 },
+    show: {
+      opacity: 1,
+      y: 0,
+      transition: { type: "spring" as const, stiffness: 380, damping: 28 },
+    },
+  };
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-3">
-            <Activity className="w-8 h-8 text-primary" />
-            Simulation Environments
+    <div className="space-y-8">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
+        <div className="relative min-w-0">
+          <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-border/60 bg-card/60 px-3 py-1 text-xs font-medium text-muted-foreground backdrop-blur-sm">
+            <Activity className="h-3.5 w-3.5 text-primary" aria-hidden />
+            Policy forecasting
+          </div>
+          <h1 className="text-3xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-white/55 md:text-4xl">
+            Simulation environments
           </h1>
-          <p className="text-muted-foreground mt-1">Configure and monitor policy impact forecasting models.</p>
+          <p className="mt-2 max-w-xl text-muted-foreground">
+            Configure and monitor policy impact models. Spin up cohorts, run rounds, and drill into each environment from the cards below.
+          </p>
         </div>
-        <button
+        <Button
+          size="lg"
+          className="h-11 shrink-0 rounded-xl shadow-[0_0_24px_-6px_var(--color-primary)] transition-transform hover:-translate-y-0.5"
           onClick={() => setIsDialogOpen(true)}
-          className="flex items-center gap-2 bg-primary text-primary-foreground px-4 py-2.5 rounded-xl font-medium shadow-[0_0_20px_rgba(14,165,233,0.2)] hover:shadow-[0_0_25px_rgba(14,165,233,0.4)] hover:-translate-y-0.5 transition-all"
         >
-          <Plus className="w-5 h-5" />
-          New Simulation
-        </button>
+          <Plus className="h-5 w-5" />
+          New simulation
+        </Button>
       </div>
 
-      <div className="bg-card border border-border rounded-2xl shadow-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-secondary/30 border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
-                <th className="px-6 py-4 font-medium">Name</th>
-                <th className="px-6 py-4 font-medium">Status</th>
-                <th className="px-6 py-4 font-medium">Progress</th>
-                <th className="px-6 py-4 font-medium">Agents</th>
-                <th className="px-6 py-4 font-medium">Created</th>
-                <th className="px-6 py-4 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border/50">
-              {isLoading ? (
-                <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">Loading...</td></tr>
-              ) : simulationList.length === 0 ? (
-                <tr><td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">No simulations created yet.</td></tr>
-              ) : (
-                simulationList.map((sim) => (
-                  <tr key={sim.id} className="hover:bg-secondary/20 transition-colors group">
-                    <td className="px-6 py-4">
-                      <div className="font-semibold text-foreground">{sim.name}</div>
-                      <div className="text-xs text-muted-foreground line-clamp-1 max-w-xs">{sim.description}</div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium uppercase tracking-wider ${
-                        sim.status === 'running' ? 'bg-primary/10 text-primary border border-primary/20' :
-                        sim.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                        'bg-secondary text-secondary-foreground border border-border'
-                      }`}>
-                        {sim.status}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden max-w-[100px]">
-                          <div
-                            className="h-full bg-primary"
-                            style={{ width: `${(sim.currentRound / sim.config.numRounds) * 100}%` }}
-                          />
-                        </div>
-                        <span className="text-xs font-mono text-muted-foreground">
-                          {sim.currentRound}/{sim.config.numRounds}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="font-mono text-sm">{sim.totalAgents}</div>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-muted-foreground">
-                      {format(new Date(sim.createdAt), 'MMM d, yyyy')}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="inline-flex flex-wrap items-center justify-end gap-2">
-                        <Link
-                          href={`/simulations/${sim.id}`}
-                          className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:text-primary-foreground hover:bg-primary px-3 py-1.5 rounded-lg transition-colors"
-                        >
-                          Details <ChevronRight className="w-4 h-4" />
-                        </Link>
-                        <button
-                          type="button"
-                          onClick={() => setSimPendingDelete(sim)}
-                          disabled={deleteSimulation.isPending}
-                          className="inline-flex items-center gap-1.5 text-sm font-medium text-destructive hover:bg-destructive/10 px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+      <motion.div
+        variants={container}
+        initial="hidden"
+        animate="show"
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4"
+      >
+        <motion.div
+          variants={item}
+          className="relative overflow-hidden rounded-2xl border border-border/50 bg-card/70 p-5 shadow-sm backdrop-blur-sm transition-colors hover:border-primary/40"
+        >
+          <div className="pointer-events-none absolute -right-2 -top-2 opacity-[0.07]">
+            <Layers className="h-24 w-24 text-primary" aria-hidden />
+          </div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Environments</p>
+          <p className="mt-1 text-3xl font-bold tabular-nums text-foreground">
+            {isLoading ? "—" : stats.total}
+          </p>
+        </motion.div>
+        <motion.div
+          variants={item}
+          className="relative overflow-hidden rounded-2xl border border-border/50 bg-card/70 p-5 shadow-sm backdrop-blur-sm transition-colors hover:border-primary/40"
+        >
+          <div className="pointer-events-none absolute -right-2 -top-2 opacity-[0.07]">
+            <Radio className="h-24 w-24 text-primary" aria-hidden />
+          </div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Running</p>
+          <p className="mt-1 text-3xl font-bold tabular-nums text-foreground">
+            {isLoading ? "—" : stats.running}
+          </p>
+        </motion.div>
+        <motion.div
+          variants={item}
+          className="relative overflow-hidden rounded-2xl border border-border/50 bg-card/70 p-5 shadow-sm backdrop-blur-sm transition-colors hover:border-emerald-500/35"
+        >
+          <div className="pointer-events-none absolute -right-2 -top-2 opacity-[0.07]">
+            <CheckCircle2 className="h-24 w-24 text-emerald-500" aria-hidden />
+          </div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Completed</p>
+          <p className="mt-1 text-3xl font-bold tabular-nums text-foreground">
+            {isLoading ? "—" : stats.completed}
+          </p>
+        </motion.div>
+        <motion.div
+          variants={item}
+          className="relative overflow-hidden rounded-2xl border border-border/50 bg-card/70 p-5 shadow-sm backdrop-blur-sm transition-colors hover:border-accent/40"
+        >
+          <div className="pointer-events-none absolute -right-2 -top-2 opacity-[0.07]">
+            <UsersRound className="h-24 w-24 text-accent" aria-hidden />
+          </div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Agents modeled</p>
+          <p className="mt-1 text-3xl font-bold tabular-nums text-foreground">
+            {isLoading ? "—" : stats.agents.toLocaleString()}
+          </p>
+        </motion.div>
+      </motion.div>
+
+      <div className="rounded-2xl border border-border/50 bg-card/50 p-4 shadow-lg backdrop-blur-md md:p-6">
+        <div className="mb-5 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold tracking-tight text-foreground">Your simulations</h2>
+            <p className="text-sm text-muted-foreground">Status, progress, and quick actions per environment.</p>
+          </div>
         </div>
+
+        {isLoading ? (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {[0, 1, 2].map((i) => (
+              <div
+                key={i}
+                className="animate-pulse rounded-2xl border border-border/40 bg-secondary/20 p-5"
+              >
+                <div className="h-5 w-2/3 rounded-md bg-secondary/60" />
+                <div className="mt-3 h-3 w-full rounded bg-secondary/40" />
+                <div className="mt-6 h-2 w-full rounded-full bg-secondary/50" />
+              </div>
+            ))}
+          </div>
+        ) : simulationList.length === 0 ? (
+          <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-border/70 bg-background/30 px-6 py-16 text-center">
+            <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-border/60 bg-card/80 shadow-inner">
+              <Layers className="h-7 w-7 text-muted-foreground" aria-hidden />
+            </div>
+            <p className="text-lg font-medium text-foreground">No environments yet</p>
+            <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+              Create your first simulation to start forecasting how policies propagate through synthetic populations.
+            </p>
+            <Button className="mt-6 rounded-xl" onClick={() => setIsDialogOpen(true)}>
+              <Plus className="h-4 w-4" />
+              New simulation
+            </Button>
+          </div>
+        ) : (
+          <motion.div
+            variants={container}
+            initial="hidden"
+            animate="show"
+            className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
+          >
+            {simulationList.map((sim) => {
+              const roundsTotal = Math.max(1, sim.config?.numRounds ?? 1);
+              const roundPct = Math.min(100, (sim.currentRound / roundsTotal) * 100);
+              return (
+                <motion.article
+                  key={sim.id}
+                  variants={item}
+                  className="group relative flex flex-col overflow-hidden rounded-2xl border border-border/60 bg-card/80 p-5 shadow-sm transition-all duration-200 hover:border-primary/35 hover:shadow-md hover:shadow-primary/[0.06]"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <Link
+                        href={`/simulations/${sim.id}`}
+                        className="block font-semibold leading-snug text-foreground transition-colors hover:text-primary"
+                      >
+                        {sim.name}
+                      </Link>
+                      {sim.description ? (
+                        <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{sim.description}</p>
+                      ) : null}
+                    </div>
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full border px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                        statusBadgeClass(sim.status),
+                      )}
+                    >
+                      {sim.status}
+                    </span>
+                  </div>
+
+                  <div className="mt-5">
+                    <div className="mb-1.5 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>Round progress</span>
+                      <span className="font-mono tabular-nums text-foreground/90">
+                        {sim.currentRound}/{roundsTotal}
+                      </span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-secondary/80">
+                      <div
+                        className="h-full rounded-full bg-gradient-to-r from-primary to-primary/70 transition-all duration-300"
+                        style={{ width: `${roundPct}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-border/50 pt-4 text-xs text-muted-foreground">
+                    <span>
+                      <span className="text-muted-foreground/80">Agents</span>{" "}
+                      <span className="font-mono font-medium text-foreground">{sim.totalAgents}</span>
+                    </span>
+                    <span className="hidden h-3 w-px bg-border sm:inline" aria-hidden />
+                    <span>Created {format(new Date(sim.createdAt), "MMM d, yyyy")}</span>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Button variant="secondary" size="sm" className="rounded-lg border border-border/60 bg-background/50" asChild>
+                      <Link href={`/simulations/${sim.id}`} className="inline-flex items-center gap-1">
+                        Open
+                        <ChevronRight className="h-3.5 w-3.5 opacity-70" />
+                      </Link>
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="rounded-lg text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      disabled={deleteSimulation.isPending}
+                      onClick={() => setSimPendingDelete(sim)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
+                    </Button>
+                  </div>
+                </motion.article>
+              );
+            })}
+          </motion.div>
+        )}
       </div>
 
       <AlertDialog
@@ -497,8 +644,4 @@ export default function Simulations() {
       )}
     </div>
   );
-}
-
-function ChevronRight({ className }: { className?: string }) {
-  return <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m9 18 6-6-6-6"/></svg>
 }

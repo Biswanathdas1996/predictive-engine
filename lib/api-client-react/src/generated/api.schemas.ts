@@ -134,7 +134,14 @@ export interface SimulationConfig {
 }
 
 export interface PatchSimulationConfigBody {
-  eventIds: number[];
+  /** Replaces config.eventIds when provided (global catalog IDs only). */
+  eventIds?: number[];
+  /**
+   * Planned total rounds; must be >= currentRound. Omit when not updating.
+   * @minimum 1
+   * @maximum 1000
+   */
+  numRounds?: number;
 }
 
 export interface Simulation {

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { useRoute } from "wouter";
+import { useRoute, Link } from "wouter";
 import {
   useGetSimulation,
   useGetSimulationPosts,
@@ -7,6 +7,7 @@ import {
   useListEvents,
   getListEventsQueryKey,
   getGetSimulationQueryKey,
+  getSimulation,
   patchSimulationConfig,
   ApiError,
   customFetch,
@@ -19,6 +20,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   Play,
+  FastForward,
   RefreshCw,
   MessageSquare,
   ArrowLeft,
@@ -49,8 +51,8 @@ import {
   CircleUserRound,
   MapPin,
   Briefcase,
+  Check,
 } from "lucide-react";
-import { Link } from "wouter";
 import { cn, formatScore, normalizeApiArray } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
 
@@ -177,6 +179,9 @@ function agentDisplayHandle(agentId: number, agentName: string): string {
   return `@agent_${agentId}`;
 }
 
+const agentFeedProfileNameLinkClass =
+  "truncate text-[13px] font-semibold tracking-tight text-foreground underline-offset-2 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm";
+
 function AgentDemographicChips({
   agentAge,
   agentGender,
@@ -284,6 +289,7 @@ function AgentDemographicChips({
 
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimulationNetworkPanel } from "@/components/SimulationNetworkPanel";
@@ -400,6 +406,46 @@ export default function SimulationDetail() {
     }
   }, [id, draftEventIds, queryClient]);
 
+  const [plannedRoundsDraftStr, setPlannedRoundsDraftStr] = useState("");
+  const [savingPlannedRounds, setSavingPlannedRounds] = useState(false);
+
+  useEffect(() => {
+    if (!sim) return;
+    setPlannedRoundsDraftStr(String(sim.config.numRounds));
+  }, [sim?.id, sim?.config?.numRounds]);
+
+  const handleSavePlannedRounds = useCallback(async () => {
+    if (!sim || !Number.isFinite(id) || id <= 0) return;
+    const minR = Math.max(1, sim.currentRound);
+    const n = parseInt(plannedRoundsDraftStr.trim(), 10);
+    if (!Number.isFinite(n) || n < minR || n > 1000) {
+      toast({
+        variant: "destructive",
+        title: "Invalid total",
+        description: `Enter a whole number from ${minR} to 1000 (at least rounds already completed).`,
+      });
+      return;
+    }
+    if (n === sim.config.numRounds) return;
+    setSavingPlannedRounds(true);
+    try {
+      await patchSimulationConfig(id, { numRounds: n });
+      await queryClient.invalidateQueries({ queryKey: getGetSimulationQueryKey(id) });
+      toast({
+        title: "Plan updated",
+        description: `This run is now set to ${n} planned round${n === 1 ? "" : "s"}.`,
+      });
+    } catch (err) {
+      toast({
+        variant: "destructive",
+        title: "Could not update plan",
+        description: err instanceof ApiError ? err.message : err instanceof Error ? err.message : "Try again.",
+      });
+    } finally {
+      setSavingPlannedRounds(false);
+    }
+  }, [id, sim, plannedRoundsDraftStr, queryClient]);
+
   const [isRunning, setIsRunning] = useState(false);
   const [streamPhase, setStreamPhase] = useState<StreamPhase>("idle");
   const [streamMessage, setStreamMessage] = useState("");
@@ -417,6 +463,12 @@ export default function SimulationDetail() {
   const [userReplyStreamMessage, setUserReplyStreamMessage] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+  /** When true, start the next round after the current stream ends successfully. */
+  const autoRunPendingRef = useRef(false);
+  /** Set when the stream emits `complete` for this round (not error / abort). */
+  const roundStreamOkRef = useRef(false);
+  const runRoundRef = useRef<() => void>(() => {});
+  const [isAutoRunning, setIsAutoRunning] = useState(false);
 
   const submitUserPostReply = useCallback(
     async (postId: number, content: string) => {
@@ -488,6 +540,7 @@ export default function SimulationDetail() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      autoRunPendingRef.current = false;
       abortRef.current?.abort();
       abortRef.current = null;
     };
@@ -495,6 +548,7 @@ export default function SimulationDetail() {
 
   const handleRunRound = useCallback(() => {
     if (isRunning) return;
+    roundStreamOkRef.current = false;
     setIsRunning(true);
     setStreamPhase("init");
     setStreamMessage("Starting round...");
@@ -594,6 +648,7 @@ export default function SimulationDetail() {
           setStreamRevealedAgentIds(null);
           setStreamPhase("done");
           setStreamMessage("Round complete!");
+          roundStreamOkRef.current = true;
           queueMicrotask(() => {
             queryClient.invalidateQueries({ queryKey: [`/api/simulations/${id}`] });
             queryClient.invalidateQueries({ queryKey: [`/api/simulations/${id}/posts`] });
@@ -612,6 +667,15 @@ export default function SimulationDetail() {
         setStreamRevealedAgentIds(null);
         setStreamPhase("error");
         setStreamMessage(msg);
+        if (autoRunPendingRef.current) {
+          autoRunPendingRef.current = false;
+          setIsAutoRunning(false);
+          toast({
+            variant: "destructive",
+            title: "Auto-run stopped",
+            description: msg || "A round failed; remaining rounds were not started.",
+          });
+        }
       },
       onDone: () => {
         if (agentActionRaf != null) {
@@ -621,7 +685,71 @@ export default function SimulationDetail() {
         flushAgentActionQueueSync();
         setIsRunning(false);
         setStreamRevealedAgentIds(null);
+
+        if (autoRunPendingRef.current && !roundStreamOkRef.current) {
+          autoRunPendingRef.current = false;
+          setIsAutoRunning(false);
+        }
+
+        const shouldChain = autoRunPendingRef.current && roundStreamOkRef.current;
+        if (shouldChain) {
+          void (async () => {
+            let fresh;
+            try {
+              fresh = await queryClient.fetchQuery({
+                queryKey: getGetSimulationQueryKey(id),
+                queryFn: ({ signal }) => getSimulation(id, { signal }),
+              });
+            } catch {
+              if (!mountedRef.current) return;
+              autoRunPendingRef.current = false;
+              setIsAutoRunning(false);
+              toast({
+                variant: "destructive",
+                title: "Auto-run stopped",
+                description: "Could not load simulation state after the round.",
+              });
+              setTimeout(() => {
+                if (!mountedRef.current) return;
+                if (abortRef.current === abort) {
+                  setStreamPhase("idle");
+                  setStreamMessage("");
+                  setStreamProgress(null);
+                }
+              }, 3000);
+              return;
+            }
+            if (!mountedRef.current) return;
+            const numRounds = fresh.config?.numRounds ?? 0;
+            const currentRound = fresh.currentRound ?? 0;
+            if (currentRound >= numRounds || fresh.status === "completed") {
+              autoRunPendingRef.current = false;
+              setIsAutoRunning(false);
+              setStreamPhase("done");
+              setStreamMessage("All rounds complete!");
+              toast({
+                title: "Simulation run finished",
+                description: `Completed ${Math.min(currentRound, numRounds)} of ${numRounds} planned rounds.`,
+              });
+            }
+            if (autoRunPendingRef.current) {
+              runRoundRef.current();
+              return;
+            }
+            setTimeout(() => {
+              if (!mountedRef.current) return;
+              if (abortRef.current === abort) {
+                setStreamPhase("idle");
+                setStreamMessage("");
+                setStreamProgress(null);
+              }
+            }, 3000);
+          })();
+          return;
+        }
+
         setTimeout(() => {
+          if (!mountedRef.current) return;
           if (abortRef.current === abort) {
             setStreamPhase("idle");
             setStreamMessage("");
@@ -631,6 +759,20 @@ export default function SimulationDetail() {
       },
     });
   }, [id, isRunning, queryClient]);
+
+  useEffect(() => {
+    runRoundRef.current = handleRunRound;
+  }, [handleRunRound]);
+
+  const handleAutoRun = useCallback(() => {
+    if (!Number.isFinite(id) || id <= 0 || isRunning) return;
+    const numRounds = sim?.config?.numRounds ?? 0;
+    const currentRound = sim?.currentRound ?? 0;
+    if (!sim || sim.status === "completed" || currentRound >= numRounds) return;
+    autoRunPendingRef.current = true;
+    setIsAutoRunning(true);
+    handleRunRound();
+  }, [id, isRunning, sim, handleRunRound]);
 
   const mockEvolutionData = useMemo(() => {
     if (!sim) return [];
@@ -692,47 +834,222 @@ export default function SimulationDetail() {
       ? Math.round((streamProgress.current / streamProgress.total) * 100)
       : 0;
 
+  const plannedRounds = Math.max(1, sim.config.numRounds);
+  const roundProgressPct = Math.min(100, Math.round((sim.currentRound / plannedRounds) * 100));
+  const roundsRemaining = Math.max(0, sim.config.numRounds - sim.currentRound);
+  const statusTone =
+    sim.status === "running"
+      ? {
+          dot: "bg-primary shadow-[0_0_10px_hsl(var(--primary))]",
+          pill: "border-primary/25 bg-primary/[0.08] text-primary",
+          pulse: true,
+        }
+      : sim.status === "completed"
+        ? {
+            dot: "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.45)]",
+            pill: "border-emerald-500/25 bg-emerald-500/[0.08] text-emerald-600 dark:text-emerald-400",
+            pulse: false,
+          }
+        : {
+            dot: "bg-muted-foreground/70",
+            pill: "border-border/80 bg-muted/40 text-muted-foreground",
+            pulse: false,
+          };
+
+  const minPlannedRounds = Math.max(1, sim.currentRound);
+  const parsedPlannedDraft = parseInt(plannedRoundsDraftStr.trim(), 10);
+  const plannedTotalValid =
+    Number.isFinite(parsedPlannedDraft) &&
+    parsedPlannedDraft >= minPlannedRounds &&
+    parsedPlannedDraft <= 1000;
+  const plannedRoundsTextDirty = plannedRoundsDraftStr.trim() !== String(sim.config.numRounds);
+  const canSavePlannedRounds =
+    plannedRoundsTextDirty &&
+    plannedTotalValid &&
+    !savingPlannedRounds &&
+    !isRunning &&
+    sim.status !== "completed";
+  const showPlannedInvalidHint =
+    plannedRoundsTextDirty && plannedRoundsDraftStr.trim() !== "" && !plannedTotalValid;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4 text-sm text-muted-foreground mb-4">
-        <Link href="/simulations" className="hover:text-foreground flex items-center gap-1 transition-colors">
-          <ArrowLeft className="w-4 h-4" /> Back to List
+        <Link
+          href="/simulations"
+          className="group inline-flex items-center gap-2 rounded-lg px-1 py-0.5 -ml-1 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+        >
+          <ArrowLeft className="h-4 w-4 transition-transform group-hover:-translate-x-0.5" /> Back to List
         </Link>
       </div>
 
-      <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-card border border-border p-6 rounded-2xl shadow-lg relative overflow-hidden">
-        <div className="absolute top-0 right-0 p-8 opacity-5">
-          <Activity className="w-32 h-32 text-primary" />
+      <div
+        className={cn(
+          "relative overflow-hidden rounded-3xl border border-border/50",
+          "bg-gradient-to-br from-card via-card to-primary/[0.035]",
+          "shadow-[0_1px_0_0_rgba(255,255,255,0.06)_inset,0_20px_50px_-20px_rgba(0,0,0,0.35)]",
+          "ring-1 ring-black/[0.04] dark:from-card dark:via-card dark:to-primary/[0.06]",
+          "dark:shadow-[0_1px_0_0_rgba(255,255,255,0.04)_inset,0_24px_56px_-24px_rgba(0,0,0,0.55)]",
+          "dark:ring-white/[0.06]",
+        )}
+      >
+        <div
+          className="pointer-events-none absolute inset-0 opacity-[0.55] dark:opacity-40"
+          style={{
+            backgroundImage: `radial-gradient(ellipse 80% 50% at 100% -20%, hsl(var(--primary) / 0.14), transparent 55%),
+              radial-gradient(ellipse 60% 40% at 0% 100%, hsl(var(--primary) / 0.06), transparent 50%)`,
+          }}
+          aria-hidden
+        />
+        <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-primary/[0.09] blur-3xl dark:bg-primary/[0.12]" aria-hidden />
+        <div className="pointer-events-none absolute -bottom-24 -left-12 h-48 w-48 rounded-full bg-violet-500/[0.05] blur-3xl dark:bg-violet-500/[0.08]" aria-hidden />
+        <div className="pointer-events-none absolute right-8 top-1/2 -translate-y-1/2 opacity-[0.07] dark:opacity-[0.09]" aria-hidden>
+          <Activity className="h-36 w-36 text-primary sm:h-44 sm:w-44" strokeWidth={1} />
         </div>
 
-        <div className="relative z-10">
-          <div className="flex items-center gap-3 mb-1">
-            <h1 className="text-2xl font-bold text-foreground">{sim.name}</h1>
-            <span className={`px-2.5 py-1 rounded-full text-xs font-medium uppercase tracking-wider ${
-              sim.status === 'running' ? 'bg-primary/10 text-primary border border-primary/20' :
-              sim.status === 'completed' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-              'bg-secondary text-secondary-foreground border border-border'
-            }`}>
-              {sim.status}
-            </span>
+        <div className="relative z-10 flex flex-col gap-8 p-6 sm:p-8 lg:flex-row lg:items-center lg:justify-between lg:gap-10">
+          <div className="min-w-0 flex-1 space-y-4">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <h1 className="text-balance text-2xl font-semibold tracking-tight text-foreground sm:text-3xl md:text-[1.75rem] md:leading-tight">
+                {sim.name}
+              </h1>
+              <span
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em]",
+                  statusTone.pill,
+                )}
+              >
+                <span
+                  className={cn("h-1.5 w-1.5 shrink-0 rounded-full", statusTone.dot, statusTone.pulse && "animate-pulse")}
+                  aria-hidden
+                />
+                {sim.status}
+              </span>
+            </div>
+            {sim.description ? (
+              <p className="max-w-2xl text-pretty text-sm leading-relaxed text-muted-foreground sm:text-[15px] sm:leading-relaxed">
+                {sim.description}
+              </p>
+            ) : null}
+            <div className="max-w-lg space-y-2 pt-0.5">
+              <div className="flex items-center justify-between gap-3 text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                <span className="flex items-center gap-1.5">
+                  <Orbit className="h-3.5 w-3.5 opacity-70" strokeWidth={2} aria-hidden />
+                  Plan progress
+                </span>
+                <span className="tabular-nums text-foreground/85">
+                  {sim.currentRound} / {sim.config.numRounds}
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-muted/50 ring-1 ring-border/30 dark:bg-muted/25">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-primary/75 via-primary to-primary/90 transition-[width] duration-500 ease-out"
+                  style={{ width: `${roundProgressPct}%` }}
+                />
+              </div>
+            </div>
           </div>
-          <p className="text-muted-foreground text-sm max-w-2xl">{sim.description}</p>
-        </div>
 
-        <div className="flex items-center gap-3 relative z-10 bg-background/50 p-2 rounded-xl border border-border/50 backdrop-blur-sm">
-          <div className="px-4 py-2 text-center border-r border-border/50">
-            <div className="text-xs text-muted-foreground uppercase tracking-wider mb-1">Round</div>
-            <div className="font-mono text-xl font-bold text-primary">{sim.currentRound} <span className="text-sm text-muted-foreground">/ {sim.config.numRounds}</span></div>
-          </div>
-          <div className="px-4 py-2">
-            <button
-              onClick={handleRunRound}
-              disabled={isRunning || sim.status === 'completed'}
-              className="flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium shadow-[0_0_15px_rgba(14,165,233,0.3)] hover:shadow-[0_0_25px_rgba(14,165,233,0.5)] disabled:opacity-50 disabled:shadow-none transition-all"
+          <div className="flex w-full shrink-0 flex-col gap-4 sm:flex-row sm:items-stretch lg:w-auto lg:min-w-[min(100%,20rem)] lg:flex-col xl:min-w-[22rem] xl:flex-row xl:items-center">
+            <div
+              className={cn(
+                "flex items-center justify-between gap-4 rounded-2xl border border-border/50 px-5 py-4",
+                "bg-background/70 shadow-sm backdrop-blur-xl",
+                "ring-1 ring-black/[0.03] dark:bg-background/30 dark:ring-white/[0.05]",
+                "sm:flex-col sm:justify-center sm:py-5 xl:flex-row xl:py-4",
+              )}
             >
-              {isRunning ? <RefreshCw className="w-5 h-5 animate-spin" /> : <Play className="w-5 h-5 fill-current" />}
-              {isRunning ? "Computing..." : "Execute Round"}
-            </button>
+              <div className="min-w-0 space-y-3 sm:text-center xl:text-left">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Current round</p>
+                <div className="flex flex-wrap items-center justify-center gap-1.5 sm:justify-center xl:justify-start">
+                  <span className="font-mono text-2xl font-semibold tabular-nums tracking-tight text-primary sm:text-3xl">
+                    {sim.currentRound}
+                  </span>
+                  <span className="font-mono text-lg font-medium text-muted-foreground sm:text-xl" aria-hidden>
+                    /
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="sim-planned-rounds-total" className="sr-only">
+                      Planned total rounds
+                    </label>
+                    <Input
+                      id="sim-planned-rounds-total"
+                      type="number"
+                      inputMode="numeric"
+                      min={minPlannedRounds}
+                      max={1000}
+                      disabled={isRunning || sim.status === "completed"}
+                      value={plannedRoundsDraftStr}
+                      onChange={(e) => setPlannedRoundsDraftStr(e.target.value)}
+                      className="h-10 w-[4.25rem] rounded-xl border-border/60 bg-background/80 px-2 text-center font-mono text-lg font-semibold tabular-nums shadow-sm focus-visible:ring-primary/30 sm:h-11 sm:w-[4.5rem] sm:text-xl"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="icon"
+                      className="h-10 w-10 shrink-0 rounded-xl sm:h-11 sm:w-11"
+                      disabled={!canSavePlannedRounds}
+                      title="Save planned total rounds"
+                      aria-label="Save planned total rounds"
+                      onClick={() => void handleSavePlannedRounds()}
+                    >
+                      {savingPlannedRounds ? (
+                        <RefreshCw className="h-4 w-4 animate-spin" strokeWidth={2} aria-hidden />
+                      ) : (
+                        <Check className="h-4 w-4" strokeWidth={2.5} aria-hidden />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+                {showPlannedInvalidHint ? (
+                  <p className="text-[11px] leading-snug text-destructive sm:text-center xl:text-left" role="alert">
+                    Use {minPlannedRounds}–1000 (not below rounds already done).
+                  </p>
+                ) : null}
+              </div>
+              <div className="hidden h-px w-full bg-border/50 sm:block xl:hidden" aria-hidden />
+              <p className="text-right text-[11px] leading-snug text-muted-foreground sm:text-center xl:text-right">
+                {roundsRemaining === 0 ? (
+                  <span className="font-medium text-emerald-600 dark:text-emerald-400">Plan complete</span>
+                ) : (
+                  <>
+                    <span className="tabular-nums font-medium text-foreground/90">{roundsRemaining}</span> round
+                    {roundsRemaining === 1 ? "" : "s"} left
+                  </>
+                )}
+              </p>
+            </div>
+
+            <div className="flex flex-1 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end xl:flex-1 xl:justify-center">
+              <Button
+                type="button"
+                size="lg"
+                onClick={handleRunRound}
+                disabled={isRunning || sim.status === "completed" || sim.currentRound >= sim.config.numRounds}
+                className="h-11 w-full rounded-xl px-5 text-sm font-semibold shadow-[0_8px_24px_-8px_hsl(var(--primary)/0.45)] transition-[transform,box-shadow] duration-200 hover:shadow-[0_12px_28px_-8px_hsl(var(--primary)/0.5)] active:scale-[0.98] sm:w-auto sm:min-w-[9.5rem]"
+              >
+                {isRunning ? <RefreshCw className="!h-[1.15rem] !w-[1.15rem] animate-spin" /> : <Play className="!h-[1.15rem] !w-[1.15rem] fill-current" />}
+                {isRunning ? "Computing…" : "Execute round"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="lg"
+                onClick={handleAutoRun}
+                disabled={
+                  isRunning || sim.status === "completed" || sim.currentRound >= sim.config.numRounds
+                }
+                title={`Runs every remaining round through round ${sim.config.numRounds} (${roundsRemaining} left).`}
+                className="h-11 w-full rounded-xl border-primary/35 bg-primary/[0.04] px-5 text-sm font-semibold text-primary shadow-sm backdrop-blur-sm transition-[transform,background-color] duration-200 hover:bg-primary/[0.08] active:scale-[0.98] dark:bg-primary/[0.06] dark:hover:bg-primary/[0.1] sm:w-auto sm:min-w-[9.5rem]"
+              >
+                {isAutoRunning ? (
+                  <RefreshCw className="!h-[1.15rem] !w-[1.15rem] animate-spin" />
+                ) : (
+                  <FastForward className="!h-[1.15rem] !w-[1.15rem]" strokeWidth={2.25} />
+                )}
+                {isAutoRunning ? "Auto-running…" : "Auto-run rest"}
+              </Button>
+            </div>
           </div>
         </div>
       </div>
@@ -781,7 +1098,12 @@ export default function SimulationDetail() {
                   <span className={`w-2 h-2 rounded-full shrink-0 ${
                     a.action === "post" ? "bg-primary" : a.action === "comment" ? "bg-accent" : "bg-muted-foreground"
                   }`} />
-                  <span className="font-medium w-32 truncate">{a.agentName}</span>
+                  <Link
+                    href={`/agents/${a.agentId}`}
+                    className="font-medium w-32 truncate text-foreground underline-offset-2 transition-colors hover:text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background rounded-sm"
+                  >
+                    {a.agentName}
+                  </Link>
                   <span className={`w-16 text-center rounded px-1.5 py-0.5 font-mono uppercase text-[10px] ${
                     a.action === "post" ? "bg-primary/10 text-primary" :
                     a.action === "comment" ? "bg-accent/10 text-accent" :
@@ -1142,9 +1464,12 @@ export default function SimulationDetail() {
                             <header className="flex flex-col gap-2 border-b border-border/10 pb-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                               <div className="min-w-0 flex-1 space-y-0.5">
                                 <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-                                  <span className="truncate text-[13px] font-semibold leading-none tracking-tight text-foreground">
+                                  <Link
+                                    href={`/agents/${post.agentId}`}
+                                    className={cn(agentFeedProfileNameLinkClass, "leading-none")}
+                                  >
                                     {post.agentName}
-                                  </span>
+                                  </Link>
                                   <span className="shrink-0 font-mono text-[10px] leading-none text-muted-foreground/85">
                                     {agentDisplayHandle(post.agentId, post.agentName)}
                                   </span>
@@ -1330,9 +1655,18 @@ export default function SimulationDetail() {
                                           <div className="min-w-0 flex-1">
                                             <div className="flex min-w-0 flex-col gap-0.5">
                                               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-                                                <span className="truncate text-[13px] font-semibold leading-tight tracking-tight text-foreground">
-                                                  {reply.agentName}
-                                                </span>
+                                                {isFacilitatorReply ? (
+                                                  <span className="truncate text-[13px] font-semibold leading-tight tracking-tight text-foreground">
+                                                    {reply.agentName}
+                                                  </span>
+                                                ) : (
+                                                  <Link
+                                                    href={`/agents/${reply.agentId}`}
+                                                    className={cn(agentFeedProfileNameLinkClass, "leading-tight")}
+                                                  >
+                                                    {reply.agentName}
+                                                  </Link>
+                                                )}
                                                 <span className="shrink-0 font-mono text-[10px] text-muted-foreground/90">
                                                   {agentDisplayHandle(reply.agentId, reply.agentName)}
                                                 </span>

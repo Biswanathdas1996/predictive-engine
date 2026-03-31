@@ -577,38 +577,55 @@ async def patch_simulation_config(id: int, body: PatchSimulationConfigRequest) -
         cfg = sim["config"]
         if isinstance(cfg, str):
             cfg = json.loads(cfg)
+        cfg = {**cfg}
 
-        ids: list[int] = []
-        for x in body.eventIds:
-            try:
-                xi = int(x)
-            except (TypeError, ValueError):
-                continue
-            if xi > 0:
-                ids.append(xi)
-        ids = list(dict.fromkeys(ids))
+        if body.eventIds is not None:
+            ids: list[int] = []
+            for x in body.eventIds:
+                try:
+                    xi = int(x)
+                except (TypeError, ValueError):
+                    continue
+                if xi > 0:
+                    ids.append(xi)
+            ids = list(dict.fromkeys(ids))
 
-        if ids:
-            scoped = await conn.fetch(
-                "SELECT id FROM events WHERE id = ANY($1::int[]) AND simulation_id IS NOT NULL",
-                ids,
-            )
-            if scoped:
+            if ids:
+                scoped = await conn.fetch(
+                    "SELECT id FROM events WHERE id = ANY($1::int[]) AND simulation_id IS NOT NULL",
+                    ids,
+                )
+                if scoped:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Only global catalog events (not tied to a simulation) can be selected.",
+                    )
+                n = await conn.fetchval(
+                    "SELECT count(*)::int FROM events WHERE id = ANY($1::int[]) AND simulation_id IS NULL",
+                    ids,
+                )
+                if int(n) != len(ids):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="One or more event IDs are missing from the global catalog.",
+                    )
+
+            cfg["eventIds"] = ids
+
+        if body.numRounds is not None:
+            current_round = int(sim["current_round"] or 0)
+            if body.numRounds < current_round:
                 raise HTTPException(
                     status_code=400,
-                    detail="Only global catalog events (not tied to a simulation) can be selected.",
+                    detail={
+                        "error": (
+                            "numRounds must be greater than or equal to currentRound "
+                            f"({current_round} round(s) already completed)."
+                        )
+                    },
                 )
-            n = await conn.fetchval(
-                "SELECT count(*)::int FROM events WHERE id = ANY($1::int[]) AND simulation_id IS NULL",
-                ids,
-            )
-            if int(n) != len(ids):
-                raise HTTPException(
-                    status_code=400,
-                    detail="One or more event IDs are missing from the global catalog.",
-                )
+            cfg["numRounds"] = body.numRounds
 
-        cfg = {**cfg, "eventIds": ids}
         await conn.execute(
             "UPDATE simulations SET config = $1::jsonb WHERE id = $2",
             json.dumps(cfg),

@@ -969,14 +969,20 @@ components:
 
     PatchSimulationConfigBody:
       type: object
+      minProperties: 1
       properties:
         eventIds:
           type: array
           items:
             type: integer
           description: Replaces config.eventIds with this list (global catalog IDs only).
-      required:
-        - eventIds
+        numRounds:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          description: >-
+            Planned total rounds for this simulation. Must be greater than or equal to currentRound
+            (rounds already completed).
 
     CreateSimulationBody:
       type: object
