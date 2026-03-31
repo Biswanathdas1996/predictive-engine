@@ -83,10 +83,25 @@ def _session_run(query: str, params: dict[str, Any] | None = None) -> None:
         session.run(query, params or {})
 
 
+def _session_read(query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Run a read query and return a list of record dicts."""
+    if _driver is None:
+        return []
+    with _driver.session() as session:
+        result = session.run(query, params or {})
+        return [dict(record) for record in result]
+
+
 async def _run(query: str, params: dict[str, Any] | None = None) -> None:
     if not is_neo4j_available():
         return
     await asyncio.to_thread(_session_run, query, params)
+
+
+async def _read(query: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    if not is_neo4j_available():
+        return []
+    return await asyncio.to_thread(_session_read, query, params)
 
 
 async def _init_schema() -> None:
@@ -284,3 +299,71 @@ async def sync_policy_to_graph(policy: dict[str, Any]) -> None:
             "summary": policy["summary"],
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Graph read helpers — used when GRAPH_BACKEND=neo4j
+# ---------------------------------------------------------------------------
+
+
+async def read_agents_from_graph(simulation_id: int) -> list[dict[str, Any]]:
+    """Read all agents for a simulation from Neo4j."""
+    rows = await _read(
+        """MATCH (a:Agent)-[:PART_OF]->(s:Simulation {simulation_id: $simId})
+           RETURN a.agent_id   AS id,
+                  a.name       AS name,
+                  a.age        AS age,
+                  a.gender     AS gender,
+                  a.region     AS region,
+                  a.occupation AS occupation,
+                  a.persona    AS persona,
+                  a.stance     AS stance,
+                  a.belief_state      AS belief_state,
+                  a.confidence_level  AS confidence_level,
+                  a.influence_score   AS influence_score,
+                  a.credibility_score AS credibility_score,
+                  a.activity_level    AS activity_level""",
+        {"simId": str(simulation_id)},
+    )
+    agents: list[dict[str, Any]] = []
+    for r in rows:
+        bs = r["belief_state"]
+        if isinstance(bs, str):
+            bs = json.loads(bs)
+        agents.append({
+            "id": int(r["id"]),
+            "name": r["name"],
+            "age": r["age"],
+            "gender": r["gender"],
+            "region": r["region"],
+            "occupation": r["occupation"],
+            "persona": r["persona"],
+            "stance": r["stance"],
+            "belief_state": bs,
+            "confidence_level": float(r["confidence_level"]),
+            "influence_score": float(r["influence_score"]),
+            "credibility_score": float(r["credibility_score"]),
+            "activity_level": float(r["activity_level"]),
+        })
+    return agents
+
+
+async def read_influences_from_graph(agent_ids: list[int]) -> list[dict[str, Any]]:
+    """Read influence edges from Neo4j for the given set of agent IDs."""
+    str_ids = [str(aid) for aid in agent_ids]
+    rows = await _read(
+        """MATCH (src:Agent)-[r:INFLUENCES]->(tgt:Agent)
+           WHERE src.agent_id IN $ids AND tgt.agent_id IN $ids
+           RETURN src.agent_id AS source_agent_id,
+                  tgt.agent_id AS target_agent_id,
+                  r.weight     AS weight""",
+        {"ids": str_ids},
+    )
+    return [
+        {
+            "source_agent_id": int(r["source_agent_id"]),
+            "target_agent_id": int(r["target_agent_id"]),
+            "weight": float(r["weight"]),
+        }
+        for r in rows
+    ]

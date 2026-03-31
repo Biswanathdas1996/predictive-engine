@@ -1,8 +1,11 @@
 pyproject.toml
 app/__init__.py
+app/auth.py
 app/config.py
 app/db.py
 app/main.py
+app/models.py
+app/rate_limit.py
 app/serialize.py
 app/routers/__init__.py
 app/routers/agents.py
@@ -13,7 +16,9 @@ app/routers/health.py
 app/routers/policies.py
 app/routers/simulations.py
 app/services/__init__.py
+app/services/agent_cohort.py
 app/services/document_text.py
+app/services/llm_config_loader.py
 app/services/llm_service.py
 app/services/neo4j_service.py
 app/services/prompt_templates.py

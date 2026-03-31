@@ -104,12 +104,15 @@ function connectionToneFor(
 
 function llmSubDetail(s: ServiceStatus | undefined): string | undefined {
   if (!s || s.llm !== "available") return undefined;
+  const backendKey = s.llmBackend as string | null | undefined;
   const backend =
-    s.llmBackend === "ollama"
-      ? "Ollama"
-      : s.llmBackend === "openai_compatible"
-        ? "OpenAI-compatible"
-        : "LLM";
+    backendKey === "pwc_genai"
+      ? "PwC GenAI"
+      : backendKey === "ollama"
+        ? "Ollama"
+        : backendKey === "openai_compatible"
+          ? "OpenAI-compatible"
+          : "LLM";
   if (s.llmModel) return `${backend} · ${s.llmModel}`;
   return backend;
 }

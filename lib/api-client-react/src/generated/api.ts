@@ -22,6 +22,8 @@ import type {
   CreateAgentBody,
   CreateEventBody,
   CreateGroupBody,
+  CreateGroupWithAgentsBody,
+  CreateGroupWithAgentsResponse,
   CreateInfluenceBody,
   CreatePolicyBody,
   CreateSimulationBody,
@@ -1763,6 +1765,96 @@ export const useCreateGroup = <
   TContext
 > => {
   return useMutation(getCreateGroupMutationOptions(options));
+};
+
+/**
+ * @summary Create a group and LLM-generated pool agents
+ */
+export const getCreateGroupWithAgentsUrl = () => {
+  return `/api/groups/with-agents`;
+};
+
+export const createGroupWithAgents = async (
+  createGroupWithAgentsBody: CreateGroupWithAgentsBody,
+  options?: RequestInit,
+): Promise<CreateGroupWithAgentsResponse> => {
+  return customFetch<CreateGroupWithAgentsResponse>(
+    getCreateGroupWithAgentsUrl(),
+    {
+      ...options,
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...options?.headers },
+      body: JSON.stringify(createGroupWithAgentsBody),
+    },
+  );
+};
+
+export const getCreateGroupWithAgentsMutationOptions = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createGroupWithAgents>>,
+    TError,
+    { data: BodyType<CreateGroupWithAgentsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof createGroupWithAgents>>,
+  TError,
+  { data: BodyType<CreateGroupWithAgentsBody> },
+  TContext
+> => {
+  const mutationKey = ["createGroupWithAgents"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof createGroupWithAgents>>,
+    { data: BodyType<CreateGroupWithAgentsBody> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return createGroupWithAgents(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type CreateGroupWithAgentsMutationResult = NonNullable<
+  Awaited<ReturnType<typeof createGroupWithAgents>>
+>;
+export type CreateGroupWithAgentsMutationBody =
+  BodyType<CreateGroupWithAgentsBody>;
+export type CreateGroupWithAgentsMutationError = ErrorType<unknown>;
+
+/**
+ * @summary Create a group and LLM-generated pool agents
+ */
+export const useCreateGroupWithAgents = <
+  TError = ErrorType<unknown>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof createGroupWithAgents>>,
+    TError,
+    { data: BodyType<CreateGroupWithAgentsBody> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof createGroupWithAgents>>,
+  TError,
+  { data: BodyType<CreateGroupWithAgentsBody> },
+  TContext
+> => {
+  return useMutation(getCreateGroupWithAgentsMutationOptions(options));
 };
 
 /**

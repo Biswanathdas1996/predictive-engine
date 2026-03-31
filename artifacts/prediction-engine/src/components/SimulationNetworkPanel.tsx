@@ -13,6 +13,8 @@ import {
   ReactFlowProvider,
   getBezierPath,
   useReactFlow,
+  useNodesState,
+  useEdgesState,
   type Edge,
   type EdgeProps,
   type Node,
@@ -38,8 +40,11 @@ import {
   ZoomIn,
   ZoomOut,
   Crosshair,
+  MessageSquare,
 } from "lucide-react";
 import { formatScore } from "@/lib/utils";
+
+/* ─── Stance Config ─── */
 
 type AgentNodeData = {
   agentId: number;
@@ -47,67 +52,85 @@ type AgentNodeData = {
   stance: string;
   policySupport: number;
   influenceScore: number;
+  /** SSE run-stream: this agent’s turn in the generation batch */
+  streamHighlighted?: boolean;
 };
 
-const stanceConfig: Record<string, { color: string; label: string }> = {
-  supportive: { color: "#22c55e", label: "Supportive" },
-  opposed: { color: "#ef4444", label: "Opposed" },
-  neutral: { color: "#6366f1", label: "Neutral" },
-  radical: { color: "#a855f7", label: "Radical" },
+const stanceConfig: Record<string, { color: string; glow: string; label: string }> = {
+  supportive: { color: "#22c55e", glow: "rgba(34, 197, 94, 0.4)", label: "Supportive" },
+  opposed: { color: "#ef4444", glow: "rgba(239, 68, 68, 0.4)", label: "Opposed" },
+  neutral: { color: "#6366f1", glow: "rgba(99, 102, 241, 0.4)", label: "Neutral" },
+  radical: { color: "#f59e0b", glow: "rgba(245, 158, 11, 0.4)", label: "Radical" },
 };
+
+/* ─── Agent Node ─── */
 
 const AgentNode = memo(function AgentNode({ data, selected }: NodeProps) {
   const d = data as AgentNodeData;
   const cfg = stanceConfig[d.stance] ?? stanceConfig.neutral;
-  const nodeSize = 32;
+  const streamOn = Boolean(d.streamHighlighted);
+  const size = 44;
+  const initials = d.label
+    .split(/\s+/)
+    .map((w) => w[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
 
   return (
-    <div style={{ position: "relative", display: "flex", alignItems: "center", userSelect: "none" }}>
-      <Handle type="target" position={Position.Top} className="!top-0" />
+    <div className={`graph-node-outer${streamOn ? " graph-node-stream-active" : ""}`}>
+      <Handle type="target" position={Position.Top} />
       <Handle type="target" position={Position.Left} id="in-l" />
       <Handle type="target" position={Position.Right} id="in-r" />
+
       <div
-        className="graph-node-circle"
+        className="graph-node-ring"
         style={{
-          width: nodeSize,
-          height: nodeSize,
-          borderRadius: "50%",
-          background: cfg.color,
-          boxShadow: selected
-            ? `0 0 0 4px ${cfg.color}40, 0 2px 8px ${cfg.color}30`
-            : `0 1px 4px rgba(0,0,0,0.15)`,
-          cursor: "pointer",
-          flexShrink: 0,
+          width: size,
+          height: size,
+          background: `linear-gradient(135deg, ${cfg.color}, ${cfg.color}cc)`,
+          boxShadow: streamOn
+            ? undefined
+            : selected
+              ? `0 0 0 3px ${cfg.color}60, 0 0 20px ${cfg.glow}, 0 4px 16px rgba(0,0,0,0.4)`
+              : `0 0 12px ${cfg.glow}, 0 2px 8px rgba(0,0,0,0.3)`,
+          border: `2px solid ${selected && !streamOn ? cfg.color : "rgba(255,255,255,0.15)"}`,
         }}
-      />
-      <span
-        style={{
-          position: "absolute",
-          left: nodeSize + 6,
-          top: "50%",
-          transform: "translateY(-50%)",
-          fontSize: 11,
-          fontWeight: 500,
-          color: "#374151",
-          whiteSpace: "nowrap",
-          pointerEvents: "none",
-          textShadow: "0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff",
-          maxWidth: 120,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-        }}
-        title={d.label}
       >
+        <div className="graph-node-glow" style={{ background: cfg.glow }} />
+        <span
+          style={{
+            fontSize: 13,
+            fontWeight: 700,
+            color: "#fff",
+            textShadow: "0 1px 2px rgba(0,0,0,0.3)",
+            letterSpacing: "0.03em",
+          }}
+        >
+          {initials}
+        </span>
+      </div>
+
+      <span className="graph-node-label" title={d.label}>
         {d.label}
       </span>
-      <Handle type="source" position={Position.Bottom} className="!bottom-0" />
+
+      <Handle type="source" position={Position.Bottom} />
       <Handle type="source" position={Position.Left} id="out-l" />
       <Handle type="source" position={Position.Right} id="out-r" />
     </div>
   );
 });
 
-type InfluenceEdgeData = { weight: number; showLabels: boolean };
+/* ─── Influence Edge ─── */
+
+type InfluenceEdgeData = {
+  weight: number;
+  showLabels: boolean;
+  convoCount: number;
+  sourceStance: string;
+  targetStance: string;
+};
 
 const InfluenceEdge = memo(function InfluenceEdge({
   id,
@@ -132,39 +155,52 @@ const InfluenceEdge = memo(function InfluenceEdge({
   const d = data as InfluenceEdgeData | undefined;
   const w = typeof d?.weight === "number" ? d.weight : 0;
   const showLabels = d?.showLabels ?? false;
+  const convoCount = d?.convoCount ?? 0;
 
-  const baseStyle = { ...(style as CSSProperties), pointerEvents: "none" as const };
+  const baseStyle: CSSProperties = {
+    ...(style as CSSProperties),
+    strokeDasharray: convoCount > 0 ? undefined : "6 4",
+    animation: convoCount > 0 ? "edge-flow 1.5s linear infinite" : undefined,
+  };
 
   return (
     <>
       <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={baseStyle} />
       <EdgeLabelRenderer>
-        {showLabels && (
-          <div
-            className="nodrag nopan"
-            style={{
-              position: "absolute",
-              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
-              zIndex: 5,
-              pointerEvents: "none",
-            }}
-          >
-            <span
+        <div
+          className="edge-convo-badge nodrag nopan"
+          style={{
+            left: labelX,
+            top: labelY,
+            pointerEvents: convoCount > 0 || showLabels ? "all" : "none",
+          }}
+        >
+          {convoCount > 0 && (
+            <div
+              className="edge-convo-pill"
               style={{
-                fontSize: 8,
-                fontWeight: 500,
-                color: "#9ca3af",
-                letterSpacing: "0.04em",
-                textTransform: "uppercase",
-                background: "rgba(250,251,252,0.9)",
-                padding: "1px 4px",
-                borderRadius: 3,
+                background: "rgba(99, 102, 241, 0.2)",
+                border: "1px solid rgba(99, 102, 241, 0.3)",
+                color: "#a5b4fc",
               }}
             >
-              INFLUENCES {w.toFixed(1)}
-            </span>
-          </div>
-        )}
+              <MessageSquare size={10} />
+              <span>{convoCount}</span>
+            </div>
+          )}
+          {showLabels && convoCount === 0 && (
+            <div
+              className="edge-convo-pill"
+              style={{
+                background: "rgba(15, 23, 42, 0.85)",
+                border: "1px solid rgba(51, 65, 85, 0.5)",
+                color: "#94a3b8",
+              }}
+            >
+              {w.toFixed(1)}
+            </div>
+          )}
+        </div>
       </EdgeLabelRenderer>
     </>
   );
@@ -172,6 +208,8 @@ const InfluenceEdge = memo(function InfluenceEdge({
 
 const nodeTypes: NodeTypes = { agent: AgentNode };
 const edgeTypes = { influence: InfluenceEdge };
+
+/* ─── Layout ─── */
 
 const NODES_PER_RING = 14;
 
@@ -187,8 +225,6 @@ function layoutGraphForce(
   const cx = width / 2;
   const cy = height / 2;
   const minDim = Math.min(width, height);
-
-  const positions: { x: number; y: number }[] = [];
 
   const connMap = new Map<number, number>();
   for (const e of edges) {
@@ -207,17 +243,18 @@ function layoutGraphForce(
     rings.push(sorted.slice(i, i + NODES_PER_RING));
   }
 
-  const baseR = minDim * 0.12;
-  const step = minDim * 0.11;
+  const baseR = minDim * 0.14;
+  const step = minDim * 0.13;
 
+  const positions: { x: number; y: number }[] = [];
   rings.forEach((ringNodes, ringIdx) => {
     const count = ringNodes.length;
     const r = baseR + ringIdx * step;
     const angleOffset = ringIdx * 0.3;
     ringNodes.forEach((_, i) => {
       const angle = (2 * Math.PI * i) / Math.max(count, 1) - Math.PI / 2 + angleOffset;
-      const jitterX = (Math.random() - 0.5) * 30;
-      const jitterY = (Math.random() - 0.5) * 30;
+      const jitterX = (Math.random() - 0.5) * 20;
+      const jitterY = (Math.random() - 0.5) * 20;
       positions.push({
         x: cx + r * Math.cos(angle) + jitterX,
         y: cy + r * Math.sin(angle) + jitterY,
@@ -228,10 +265,7 @@ function layoutGraphForce(
   return sorted.map((node, idx) => ({
     id: String(node.id),
     type: "agent",
-    position: {
-      x: positions[idx].x - 16,
-      y: positions[idx].y - 16,
-    },
+    position: { x: positions[idx].x - 22, y: positions[idx].y - 22 },
     data: {
       agentId: node.id,
       label: node.name,
@@ -242,32 +276,323 @@ function layoutGraphForce(
   }));
 }
 
-function buildEdges(edges: SimulationGraphEdge[], showLabels: boolean): Edge[] {
-  return edges.map((e, i) => ({
-    id: `e-${e.source}-${e.target}-${i}`,
-    source: String(e.source),
-    target: String(e.target),
-    type: "influence",
-    data: { weight: e.weight, showLabels } satisfies InfluenceEdgeData,
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      color: "#ccc",
-      width: 14,
-      height: 14,
-    },
-    style: {
-      stroke: "#d1d5db",
-      strokeWidth: Math.max(1, 0.8 + e.weight * 2),
-    },
+/* ─── Conversation helpers ─── */
+
+type ConversationItem = {
+  id: number;
+  agentId: number;
+  agentName: string;
+  content: string;
+  round: number;
+  sentiment: number;
+  type: "post" | "comment";
+};
+
+function sameId(a: number, b: number): boolean {
+  return Number(a) === Number(b);
+}
+
+function getEdgeConversations(
+  sourceId: number,
+  targetId: number,
+  posts: Post[],
+  comments: GraphComment[],
+): ConversationItem[] {
+  const items: ConversationItem[] = [];
+
+  // Posts by source agent that have comments from target, and vice versa
+  const sourcePosts = posts.filter((p) => sameId(p.agentId, sourceId));
+  const targetPosts = posts.filter((p) => sameId(p.agentId, targetId));
+  const sourcePostIds = new Set(sourcePosts.map((p) => p.id));
+  const targetPostIds = new Set(targetPosts.map((p) => p.id));
+
+  // Comments from target on source's posts
+  const targetCommentsOnSource = comments.filter(
+    (c) => sameId(c.agentId, targetId) && sourcePostIds.has(c.postId),
+  );
+  // Comments from source on target's posts
+  const sourceCommentsOnTarget = comments.filter(
+    (c) => sameId(c.agentId, sourceId) && targetPostIds.has(c.postId),
+  );
+
+  // Add the relevant posts that have cross-agent comments
+  const postsWithReplies = new Set<number>();
+  for (const c of targetCommentsOnSource) postsWithReplies.add(c.postId);
+  for (const c of sourceCommentsOnTarget) postsWithReplies.add(c.postId);
+
+  for (const p of [...sourcePosts, ...targetPosts]) {
+    if (postsWithReplies.has(p.id)) {
+      items.push({
+        id: p.id,
+        agentId: p.agentId,
+        agentName: p.agentName,
+        content: p.content,
+        round: p.round,
+        sentiment: p.sentiment,
+        type: "post",
+      });
+    }
+  }
+
+  for (const c of [...targetCommentsOnSource, ...sourceCommentsOnTarget]) {
+    items.push({
+      id: c.id + 100000,
+      agentId: c.agentId,
+      agentName: c.agentName,
+      content: c.content,
+      round: c.round,
+      sentiment: c.sentiment,
+      type: "comment",
+    });
+  }
+
+  items.sort((a, b) => a.round - b.round || a.id - b.id);
+  return items;
+}
+
+type AgentPostThread = {
+  post: Post;
+  /** All comments on this post, ordered by round */
+  replies: GraphComment[];
+};
+
+type AgentReplyElsewhere = {
+  comment: GraphComment;
+  parentPost: Post;
+};
+
+function buildAgentPostThreads(agentId: number, posts: Post[], comments: GraphComment[]): AgentPostThread[] {
+  const myPosts = posts
+    .filter((p) => sameId(p.agentId, agentId))
+    .sort((a, b) => a.round - b.round || a.id - b.id);
+  return myPosts.map((post) => ({
+    post,
+    replies: comments
+      .filter((c) => c.postId === post.id)
+      .sort((a, b) => a.round - b.round || a.id - b.id),
   }));
 }
+
+function buildAgentRepliesOnOthersPosts(
+  agentId: number,
+  posts: Post[],
+  comments: GraphComment[],
+): AgentReplyElsewhere[] {
+  const postById = new Map(posts.map((p) => [p.id, p]));
+  const out: AgentReplyElsewhere[] = [];
+  for (const c of comments) {
+    if (!sameId(c.agentId, agentId)) continue;
+    const parent = postById.get(c.postId);
+    if (!parent || sameId(parent.agentId, agentId)) continue;
+    out.push({ comment: c, parentPost: parent });
+  }
+  out.sort((a, b) => a.comment.round - b.comment.round || a.comment.id - b.comment.id);
+  return out;
+}
+
+function countEdgeConversations(
+  sourceId: number,
+  targetId: number,
+  posts: Post[],
+  comments: GraphComment[],
+): number {
+  const sourcePostIds = new Set(posts.filter((p) => sameId(p.agentId, sourceId)).map((p) => p.id));
+  const targetPostIds = new Set(posts.filter((p) => sameId(p.agentId, targetId)).map((p) => p.id));
+  let count = 0;
+  for (const c of comments) {
+    if (sameId(c.agentId, targetId) && sourcePostIds.has(c.postId)) count++;
+    if (sameId(c.agentId, sourceId) && targetPostIds.has(c.postId)) count++;
+  }
+  return count;
+}
+
+/* ─── Build edges ─── */
+
+function buildEdges(
+  edges: SimulationGraphEdge[],
+  showLabels: boolean,
+  nodes: SimulationGraphNode[],
+  posts: Post[],
+  comments: GraphComment[],
+): Edge[] {
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+  return edges.map((e, i) => {
+    const sourceNode = nodeMap.get(e.source);
+    const targetNode = nodeMap.get(e.target);
+    const convoCount = countEdgeConversations(e.source, e.target, posts, comments);
+    const sourceColor = stanceConfig[sourceNode?.stance ?? "neutral"]?.color ?? "#6366f1";
+    const targetColor = stanceConfig[targetNode?.stance ?? "neutral"]?.color ?? "#6366f1";
+
+    // Blend source and target colors for the edge
+    const hasConvo = convoCount > 0;
+    const strokeColor = hasConvo
+      ? "rgba(99, 102, 241, 0.5)"
+      : "rgba(99, 102, 241, 0.15)";
+
+    return {
+      id: `e-${e.source}-${e.target}-${i}`,
+      source: String(e.source),
+      target: String(e.target),
+      type: "influence",
+      data: {
+        weight: e.weight,
+        showLabels,
+        convoCount,
+        sourceStance: sourceNode?.stance ?? "neutral",
+        targetStance: targetNode?.stance ?? "neutral",
+      } satisfies InfluenceEdgeData,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        color: hasConvo ? "rgba(99, 102, 241, 0.6)" : "rgba(99, 102, 241, 0.25)",
+        width: 12,
+        height: 12,
+      },
+      style: {
+        stroke: strokeColor,
+        strokeWidth: Math.max(1.5, 1 + e.weight * 2.5),
+      },
+    };
+  });
+}
+
+/* ─── Conversation Panel ─── */
+
+function ConversationPanel({
+  sourceNode,
+  targetNode,
+  conversations,
+  onClose,
+}: {
+  sourceNode: SimulationGraphNode;
+  targetNode: SimulationGraphNode;
+  conversations: ConversationItem[];
+  onClose: () => void;
+}) {
+  const sCfg = stanceConfig[sourceNode.stance] ?? stanceConfig.neutral;
+  const tCfg = stanceConfig[targetNode.stance] ?? stanceConfig.neutral;
+
+  return (
+    <div className="convo-panel">
+      <div
+        style={{
+          padding: "16px 20px",
+          borderBottom: "1px solid rgba(51, 65, 85, 0.4)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: sCfg.color,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 10,
+              fontWeight: 700,
+              color: "#fff",
+              border: "2px solid rgba(255,255,255,0.15)",
+            }}
+          >
+            {sourceNode.name.charAt(0)}
+          </div>
+          <ArrowRight size={14} style={{ color: "#64748b" }} />
+          <div
+            style={{
+              width: 28,
+              height: 28,
+              borderRadius: "50%",
+              background: tCfg.color,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 10,
+              fontWeight: 700,
+              color: "#fff",
+              border: "2px solid rgba(255,255,255,0.15)",
+            }}
+          >
+            {targetNode.name.charAt(0)}
+          </div>
+          <div style={{ marginLeft: 4 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>
+              Conversation
+            </div>
+            <div style={{ fontSize: 10, color: "#64748b" }}>
+              {sourceNode.name} & {targetNode.name}
+            </div>
+          </div>
+        </div>
+        <button
+          onClick={onClose}
+          style={{
+            background: "rgba(51, 65, 85, 0.4)",
+            border: "1px solid rgba(71, 85, 105, 0.5)",
+            borderRadius: 8,
+            color: "#94a3b8",
+            cursor: "pointer",
+            padding: 5,
+            display: "flex",
+          }}
+        >
+          <X size={14} />
+        </button>
+      </div>
+
+      <div style={{ padding: "16px 20px", display: "flex", flexDirection: "column", gap: 10 }}>
+        {conversations.length === 0 ? (
+          <div style={{ textAlign: "center", color: "#64748b", fontSize: 12, padding: "20px 0" }}>
+            No direct conversations found between these agents.
+          </div>
+        ) : (
+          conversations.map((item) => {
+            const isSource = item.agentId === sourceNode.id;
+            const agentCfg = isSource ? sCfg : tCfg;
+            return (
+              <div
+                key={`${item.type}-${item.id}`}
+                style={{ display: "flex", flexDirection: "column", alignItems: isSource ? "flex-start" : "flex-end" }}
+              >
+                <div
+                  style={{
+                    fontSize: 9,
+                    color: "#64748b",
+                    marginBottom: 3,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 4,
+                  }}
+                >
+                  <div style={{ width: 6, height: 6, borderRadius: "50%", background: agentCfg.color }} />
+                  <span style={{ fontWeight: 600 }}>{item.agentName}</span>
+                  <span style={{ color: "#475569" }}>
+                    R{item.round} · {item.type === "post" ? "posted" : "replied"}
+                  </span>
+                </div>
+                <div className={`convo-msg ${isSource ? "convo-msg-left" : "convo-msg-right"}`}>
+                  {item.content}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ─── Toolbar ─── */
 
 function GraphToolbarControls({ onFitView }: { onFitView: () => void }) {
   const { zoomIn, zoomOut } = useReactFlow();
   const btnStyle: CSSProperties = {
     background: "none",
     border: "none",
-    color: "#6b7280",
+    color: "#94a3b8",
     cursor: "pointer",
     padding: 4,
     display: "flex",
@@ -281,7 +606,7 @@ function GraphToolbarControls({ onFitView }: { onFitView: () => void }) {
       <button onClick={() => zoomOut({ duration: 200 })} style={btnStyle} title="Zoom out">
         <ZoomOut size={16} />
       </button>
-      <div style={{ width: 1, height: 16, background: "#e5e7eb" }} />
+      <div style={{ width: 1, height: 16, background: "rgba(51, 65, 85, 0.5)" }} />
       <button onClick={onFitView} style={btnStyle} title="Fit to view">
         <Crosshair size={16} />
       </button>
@@ -289,30 +614,47 @@ function GraphToolbarControls({ onFitView }: { onFitView: () => void }) {
   );
 }
 
+/* ─── Inspector Panel ─── */
+
 function InspectorPanel({
   selected,
   outgoing,
   incoming,
-  selectedPosts,
-  selectedComments,
+  posts,
+  comments,
   allNodes,
   onClose,
 }: {
   selected: SimulationGraphNode;
   outgoing: SimulationGraphEdge[];
   incoming: SimulationGraphEdge[];
-  selectedPosts: Post[];
-  selectedComments: GraphComment[];
+  posts: Post[];
+  comments: GraphComment[];
   allNodes: SimulationGraphNode[];
   onClose: () => void;
 }) {
   const cfg = stanceConfig[selected.stance] ?? stanceConfig.neutral;
+  const postThreads = useMemo(
+    () => buildAgentPostThreads(selected.id, posts, comments),
+    [selected.id, posts, comments],
+  );
+  const repliesOnOthersPosts = useMemo(
+    () => buildAgentRepliesOnOthersPosts(selected.id, posts, comments),
+    [selected.id, posts, comments],
+  );
+  const msgBodyStyle: CSSProperties = {
+    fontSize: 12,
+    color: "#e2e8f0",
+    lineHeight: 1.55,
+    whiteSpace: "pre-wrap",
+    wordBreak: "break-word",
+  };
   return (
     <div className="graph-db-inspector">
       <div
         style={{
           padding: "16px 20px",
-          borderBottom: "1px solid #f0f0f0",
+          borderBottom: "1px solid rgba(51, 65, 85, 0.4)",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
@@ -321,25 +663,39 @@ function InspectorPanel({
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div
             style={{
-              width: 36,
-              height: 36,
+              width: 40,
+              height: 40,
               borderRadius: "50%",
-              background: cfg.color,
-              flexShrink: 0,
+              background: `linear-gradient(135deg, ${cfg.color}, ${cfg.color}cc)`,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: 14,
+              fontWeight: 700,
+              color: "#fff",
+              border: "2px solid rgba(255,255,255,0.15)",
+              boxShadow: `0 0 16px ${cfg.glow}`,
             }}
-          />
+          >
+            {selected.name
+              .split(/\s+/)
+              .map((w) => w[0])
+              .join("")
+              .toUpperCase()
+              .slice(0, 2)}
+          </div>
           <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: "#111827" }}>{selected.name}</div>
-            <div style={{ fontSize: 11, color: "#9ca3af" }}>Agent #{selected.id}</div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: "#e2e8f0" }}>{selected.name}</div>
+            <div style={{ fontSize: 11, color: "#64748b" }}>Agent #{selected.id}</div>
           </div>
         </div>
         <button
           onClick={onClose}
           style={{
-            background: "#f3f4f6",
-            border: "1px solid #e5e7eb",
-            borderRadius: 6,
-            color: "#6b7280",
+            background: "rgba(51, 65, 85, 0.4)",
+            border: "1px solid rgba(71, 85, 105, 0.5)",
+            borderRadius: 8,
+            color: "#94a3b8",
             cursor: "pointer",
             padding: 5,
             display: "flex",
@@ -360,20 +716,28 @@ function InspectorPanel({
             <div
               key={item.label}
               style={{
-                background: "#f9fafb",
-                borderRadius: 8,
+                background: "rgba(30, 41, 59, 0.6)",
+                borderRadius: 10,
                 padding: "10px 12px",
-                border: "1px solid #f0f0f0",
+                border: "1px solid rgba(51, 65, 85, 0.5)",
               }}
             >
-              <div style={{ fontSize: 9, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 4 }}>
+              <div
+                style={{
+                  fontSize: 9,
+                  color: "#64748b",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  marginBottom: 4,
+                }}
+              >
                 {item.label}
               </div>
               <div
                 style={{
                   fontSize: 13,
                   fontWeight: 600,
-                  color: item.color ?? "#111827",
+                  color: item.color ?? "#e2e8f0",
                   textTransform: item.capitalize ? "capitalize" : undefined,
                   fontFamily: item.mono ? "ui-monospace, monospace" : undefined,
                 }}
@@ -393,7 +757,7 @@ function InspectorPanel({
               style={{
                 fontSize: 10,
                 fontWeight: 600,
-                color: "#9ca3af",
+                color: "#64748b",
                 textTransform: "uppercase",
                 letterSpacing: "0.08em",
                 marginBottom: 6,
@@ -402,15 +766,28 @@ function InspectorPanel({
                 gap: 6,
               }}
             >
-              <ArrowRight size={12} style={isOutgoing ? undefined : { transform: "rotate(180deg)" }} />
+              <ArrowRight
+                size={12}
+                style={isOutgoing ? undefined : { transform: "rotate(180deg)" }}
+              />
               {title} ({items.length})
             </div>
             {items.length === 0 ? (
-              <div style={{ fontSize: 12, color: "#d1d5db" }}>None</div>
+              <div style={{ fontSize: 12, color: "#475569" }}>None</div>
             ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 3, maxHeight: 140, overflowY: "auto" }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 3,
+                  maxHeight: 140,
+                  overflowY: "auto",
+                }}
+              >
                 {items.map((e, i) => {
-                  const other = allNodes.find((n) => n.id === (isOutgoing ? e.target : e.source));
+                  const other = allNodes.find(
+                    (n) => n.id === (isOutgoing ? e.target : e.source),
+                  );
                   const oc = stanceConfig[other?.stance ?? "neutral"] ?? stanceConfig.neutral;
                   return (
                     <div
@@ -419,18 +796,35 @@ function InspectorPanel({
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "space-between",
-                        padding: "5px 8px",
-                        background: "#f9fafb",
-                        borderRadius: 6,
-                        border: "1px solid #f0f0f0",
+                        padding: "6px 10px",
+                        background: "rgba(30, 41, 59, 0.5)",
+                        borderRadius: 8,
+                        border: "1px solid rgba(51, 65, 85, 0.4)",
                         fontSize: 12,
                       }}
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: oc.color, flexShrink: 0 }} />
-                        <span style={{ color: "#374151" }}>{other?.name ?? `#${isOutgoing ? e.target : e.source}`}</span>
+                        <div
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: "50%",
+                            background: oc.color,
+                            boxShadow: `0 0 6px ${oc.glow}`,
+                            flexShrink: 0,
+                          }}
+                        />
+                        <span style={{ color: "#cbd5e1" }}>
+                          {other?.name ?? `#${isOutgoing ? e.target : e.source}`}
+                        </span>
                       </div>
-                      <span style={{ color: "#6366f1", fontFamily: "ui-monospace, monospace", fontSize: 10 }}>
+                      <span
+                        style={{
+                          color: "#818cf8",
+                          fontFamily: "ui-monospace, monospace",
+                          fontSize: 10,
+                        }}
+                      >
                         {e.weight.toFixed(2)}
                       </span>
                     </div>
@@ -441,86 +835,239 @@ function InspectorPanel({
           </div>
         ))}
 
-        {selectedPosts.length > 0 && (
-          <div style={{ borderTop: "1px solid #f0f0f0", paddingTop: 12 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
-              <MessageCircle size={12} />
-              Posts ({selectedPosts.length})
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 150, overflowY: "auto" }}>
-              {selectedPosts.slice(0, 6).map((p) => (
-                <div
-                  key={p.id}
-                  style={{
-                    padding: "6px 8px",
-                    background: "#f9fafb",
-                    borderRadius: 6,
-                    border: "1px solid #f0f0f0",
-                    fontSize: 11,
-                    color: "#6b7280",
-                    lineHeight: 1.4,
-                  }}
-                >
-                  <div style={{ fontSize: 9, color: "#9ca3af", marginBottom: 2, fontFamily: "ui-monospace, monospace" }}>
-                    Round {p.round}
-                  </div>
-                  <div style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                    {p.content}
-                  </div>
-                </div>
-              ))}
-            </div>
+        <div
+          style={{
+            borderTop: "1px solid rgba(51, 65, 85, 0.4)",
+            paddingTop: 12,
+            marginTop: 4,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 600,
+              color: "#64748b",
+              textTransform: "uppercase",
+              letterSpacing: "0.08em",
+              marginBottom: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <MessageCircle size={12} />
+            Conversation
           </div>
-        )}
 
-        {selectedComments.length > 0 && (
-          <div style={{ borderTop: "1px solid #f0f0f0", paddingTop: 12, marginTop: 10 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, color: "#9ca3af", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
-              Comments ({selectedComments.length})
+          {postThreads.length === 0 && repliesOnOthersPosts.length === 0 ? (
+            <div style={{ fontSize: 12, color: "#475569", lineHeight: 1.5 }}>
+              Nothing in graph data for this agent yet—often they chose <strong style={{ color: "#94a3b8" }}>ignore</strong>{" "}
+              that round (no post/comment row). Try another agent, refresh the tab, or re-open Network after a round
+              finishes. Data is from the API <span style={{ fontFamily: "ui-monospace, monospace" }}>/graph</span> (Postgres),
+              not Neo4j.
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 120, overflowY: "auto" }}>
-              {selectedComments.slice(0, 5).map((c) => (
-                <div
-                  key={c.id}
-                  style={{
-                    padding: "6px 8px",
-                    background: "#f9fafb",
-                    borderRadius: 6,
-                    border: "1px solid #f0f0f0",
-                    fontSize: 11,
-                    color: "#6b7280",
-                    lineHeight: 1.4,
-                  }}
-                >
-                  <div style={{ fontSize: 9, color: "#9ca3af", marginBottom: 2, fontFamily: "ui-monospace, monospace" }}>
-                    R{c.round} · Sent {formatScore(c.sentiment)}
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {postThreads.length > 0 && (
+                <div>
+                  <div
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: "#818cf8",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
+                      marginBottom: 8,
+                    }}
+                  >
+                    Their posts & replies on them ({postThreads.length})
                   </div>
-                  <div style={{ display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
-                    {c.content}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {postThreads.map(({ post, replies }) => (
+                      <div
+                        key={post.id}
+                        style={{
+                          padding: "10px 12px",
+                          background: "rgba(30, 41, 59, 0.55)",
+                          borderRadius: 10,
+                          border: "1px solid rgba(51, 65, 85, 0.45)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: 9,
+                            color: "#818cf8",
+                            marginBottom: 6,
+                            fontFamily: "ui-monospace, monospace",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {selected.name} · posted · round {post.round} · sent{" "}
+                          {formatScore(post.sentiment)}
+                        </div>
+                        <div style={msgBodyStyle}>{post.content}</div>
+                        {replies.length > 0 ? (
+                          <div
+                            style={{
+                              marginTop: 10,
+                              paddingTop: 10,
+                              borderTop: "1px solid rgba(51, 65, 85, 0.35)",
+                            }}
+                          >
+                            <div
+                              style={{
+                                fontSize: 9,
+                                fontWeight: 600,
+                                color: "#64748b",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.06em",
+                                marginBottom: 8,
+                              }}
+                            >
+                              Replies ({replies.length})
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                              {replies.map((c) => {
+                                const isSelf = c.agentId === selected.id;
+                                return (
+                                  <div
+                                    key={c.id}
+                                    style={{
+                                      padding: "8px 10px",
+                                      background: "rgba(15, 23, 42, 0.65)",
+                                      borderRadius: 8,
+                                      border: "1px solid rgba(71, 85, 105, 0.35)",
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        fontSize: 9,
+                                        color: "#94a3b8",
+                                        marginBottom: 4,
+                                        fontFamily: "ui-monospace, monospace",
+                                      }}
+                                    >
+                                      {isSelf ? `${selected.name} (reply)` : c.agentName} · round{" "}
+                                      {c.round} · sent {formatScore(c.sentiment)}
+                                    </div>
+                                    <div style={{ ...msgBodyStyle, fontSize: 11, color: "#cbd5e1" }}>
+                                      {c.content}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : (
+                          <div
+                            style={{
+                              marginTop: 8,
+                              fontSize: 11,
+                              color: "#475569",
+                              fontStyle: "italic",
+                            }}
+                          >
+                            No replies on this post.
+                          </div>
+                        )}
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))}
+              )}
+
+              {repliesOnOthersPosts.length > 0 && (
+                <div>
+                  <div
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: "#818cf8",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.06em",
+                      marginBottom: 8,
+                    }}
+                  >
+                    Their replies on others&apos; posts ({repliesOnOthersPosts.length})
+                  </div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {repliesOnOthersPosts.map(({ comment, parentPost }) => (
+                      <div
+                        key={comment.id}
+                        style={{
+                          padding: "10px 12px",
+                          background: "rgba(30, 41, 59, 0.55)",
+                          borderRadius: 10,
+                          border: "1px solid rgba(51, 65, 85, 0.45)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: 9,
+                            color: "#94a3b8",
+                            marginBottom: 6,
+                            fontFamily: "ui-monospace, monospace",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Original — {parentPost.agentName} · round {parentPost.round}
+                        </div>
+                        <div style={{ ...msgBodyStyle, fontSize: 11, color: "#94a3b8" }}>
+                          {parentPost.content}
+                        </div>
+                        <div
+                          style={{
+                            marginTop: 10,
+                            paddingTop: 10,
+                            borderTop: "1px solid rgba(51, 65, 85, 0.35)",
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontSize: 9,
+                              color: "#818cf8",
+                              marginBottom: 4,
+                              fontFamily: "ui-monospace, monospace",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {selected.name} replied · round {comment.round} · sent{" "}
+                            {formatScore(comment.sentiment)}
+                          </div>
+                          <div style={msgBodyStyle}>{comment.content}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
+/* ─── Graph Content ─── */
+
 function GraphContent({
-  nodes,
-  edges,
+  initialNodes,
+  initialEdges,
   onNodeClick,
   selectedId,
   graph,
+  totalAgentCount,
+  progressiveActive,
   isFullscreen,
   onToggleFullscreen,
   showEdgeLabels,
   onToggleEdgeLabels,
+  streamHighlightAgentId,
+  streamPhase,
 }: {
-  nodes: Node[];
-  edges: Edge[];
+  initialNodes: Node[];
+  initialEdges: Edge[];
   onNodeClick: (_: React.MouseEvent, node: Node) => void;
   selectedId: number | null;
   graph: {
@@ -529,19 +1076,93 @@ function GraphContent({
     posts: Post[];
     comments: GraphComment[];
   };
+  totalAgentCount: number;
+  progressiveActive: boolean;
   isFullscreen: boolean;
   onToggleFullscreen: () => void;
   showEdgeLabels: boolean;
   onToggleEdgeLabels: () => void;
+  streamHighlightAgentId: number | null;
+  streamPhase: string;
 }) {
+  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const { fitView } = useReactFlow();
   const handleFitView = useCallback(() => fitView({ padding: 0.15, duration: 300 }), [fitView]);
 
+  // Sync edges when showEdgeLabels changes
+  useEffect(() => {
+    setEdges(initialEdges);
+  }, [initialEdges, setEdges]);
+
+  // Layout from initialNodes; preserve React Flow positions when only SSE highlight / selection changes.
+  useEffect(() => {
+    setNodes((prev) => {
+      const byInitial = new Map(initialNodes.map((n) => [n.id, n]));
+      const structureOk =
+        prev.length === initialNodes.length &&
+        prev.length > 0 &&
+        prev.every((p) => byInitial.has(p.id));
+
+      const applyMeta = (n: Node, d: AgentNodeData) => {
+        const streamOn =
+          streamHighlightAgentId != null && d.agentId === streamHighlightAgentId;
+        return {
+          ...n,
+          zIndex: streamOn ? 30 : selectedId === d.agentId ? 20 : 0,
+          data: { ...d, streamHighlighted: streamOn },
+        };
+      };
+
+      if (!structureOk) {
+        return initialNodes.map((n) => applyMeta(n, n.data as AgentNodeData));
+      }
+      return prev.map((n) => {
+        const fresh = byInitial.get(n.id);
+        if (!fresh) return n;
+        const fd = fresh.data as AgentNodeData;
+        return applyMeta({ ...n, data: { ...fd } }, fd);
+      });
+    });
+  }, [initialNodes, streamHighlightAgentId, selectedId, setNodes]);
+
   const selected = graph.nodes.find((n) => n.id === selectedId) ?? null;
-  const selectedPosts = graph.posts.filter((p) => p.agentId === selectedId);
-  const selectedComments = graph.comments.filter((c) => c.agentId === selectedId);
   const outgoing = graph.edges.filter((e) => e.source === selectedId);
   const incoming = graph.edges.filter((e) => e.target === selectedId);
+
+  // Edge click for conversation panel
+  const [selectedEdge, setSelectedEdge] = useState<{
+    source: number;
+    target: number;
+  } | null>(null);
+
+  const onEdgeClick = useCallback(
+    (_: React.MouseEvent, edge: Edge) => {
+      const src = Number(edge.source);
+      const tgt = Number(edge.target);
+      setSelectedEdge((prev) =>
+        prev?.source === src && prev?.target === tgt ? null : { source: src, target: tgt },
+      );
+    },
+    [],
+  );
+
+  const edgeConversations = useMemo(() => {
+    if (!selectedEdge) return [];
+    return getEdgeConversations(
+      selectedEdge.source,
+      selectedEdge.target,
+      graph.posts,
+      graph.comments,
+    );
+  }, [selectedEdge, graph.posts, graph.comments]);
+
+  const edgeSourceNode = selectedEdge
+    ? graph.nodes.find((n) => n.id === selectedEdge.source)
+    : null;
+  const edgeTargetNode = selectedEdge
+    ? graph.nodes.find((n) => n.id === selectedEdge.target)
+    : null;
 
   const [searchQuery, setSearchQuery] = useState("");
   const [showSearch, setShowSearch] = useState(false);
@@ -557,7 +1178,7 @@ function GraphContent({
   const btnStyle: CSSProperties = {
     background: "none",
     border: "none",
-    color: "#6b7280",
+    color: "#94a3b8",
     cursor: "pointer",
     padding: 4,
     display: "flex",
@@ -569,17 +1190,35 @@ function GraphContent({
       <div className="graph-db-toolbar">
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <div className="graph-db-toolbar-group" style={{ gap: 8 }}>
-            <span style={{ fontSize: 13, fontWeight: 600, color: "#111827" }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>
               Influence Network
             </span>
-            <span style={{ fontSize: 11, color: "#9ca3af" }}>
+            <span style={{ fontSize: 11, color: "#64748b" }}>
               {graph.nodes.length} nodes · {graph.edges.length} edges
             </span>
+            {streamPhase === "generation" && streamHighlightAgentId != null ? (
+              <span
+                className="graph-stream-live-badge"
+                style={{
+                  fontSize: 10,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: "0.06em",
+                  color: "#22d3ee",
+                  padding: "2px 8px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(34, 211, 238, 0.35)",
+                  background: "rgba(34, 211, 238, 0.08)",
+                }}
+              >
+                Generating · agent #{streamHighlightAgentId}
+              </span>
+            ) : null}
           </div>
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <div className="graph-db-toolbar-group" style={{ gap: 8 }}>
-            <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 500 }}>Show Edge Labels</span>
+            <span style={{ fontSize: 11, color: "#94a3b8", fontWeight: 500 }}>Edge Labels</span>
             <button
               className={`toggle-switch ${showEdgeLabels ? "active" : ""}`}
               onClick={onToggleEdgeLabels}
@@ -588,7 +1227,7 @@ function GraphContent({
           </div>
           {showSearch && (
             <div className="graph-db-toolbar-group" style={{ position: "relative" }}>
-              <Search size={14} style={{ color: "#9ca3af" }} />
+              <Search size={14} style={{ color: "#64748b" }} />
               <input
                 type="text"
                 value={searchQuery}
@@ -599,7 +1238,7 @@ function GraphContent({
                   background: "transparent",
                   border: "none",
                   outline: "none",
-                  color: "#111827",
+                  color: "#e2e8f0",
                   fontSize: 12,
                   width: 150,
                 }}
@@ -612,11 +1251,11 @@ function GraphContent({
                     left: 0,
                     right: 0,
                     marginTop: 4,
-                    background: "#fff",
-                    border: "1px solid #e5e7eb",
-                    borderRadius: 8,
+                    background: "rgba(15, 23, 42, 0.95)",
+                    border: "1px solid rgba(99, 102, 241, 0.2)",
+                    borderRadius: 10,
                     overflow: "hidden",
-                    boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
                     zIndex: 20,
                   }}
                 >
@@ -638,16 +1277,26 @@ function GraphContent({
                           padding: "8px 12px",
                           background: "transparent",
                           border: "none",
-                          borderBottom: "1px solid #f3f4f6",
-                          color: "#374151",
+                          borderBottom: "1px solid rgba(51, 65, 85, 0.3)",
+                          color: "#cbd5e1",
                           fontSize: 12,
                           cursor: "pointer",
                           textAlign: "left",
                         }}
                       >
-                        <div style={{ width: 8, height: 8, borderRadius: "50%", background: c.color }} />
+                        <div
+                          style={{
+                            width: 8,
+                            height: 8,
+                            borderRadius: "50%",
+                            background: c.color,
+                            boxShadow: `0 0 6px ${c.glow}`,
+                          }}
+                        />
                         {n.name}
-                        <span style={{ marginLeft: "auto", fontSize: 10, color: "#9ca3af" }}>#{n.id}</span>
+                        <span style={{ marginLeft: "auto", fontSize: 10, color: "#475569" }}>
+                          #{n.id}
+                        </span>
                       </button>
                     );
                   })}
@@ -658,14 +1307,21 @@ function GraphContent({
           <GraphToolbarControls onFitView={handleFitView} />
           <div className="graph-db-toolbar-group" style={{ gap: 4 }}>
             <button
-              onClick={() => { setShowSearch(!showSearch); setSearchQuery(""); }}
+              onClick={() => {
+                setShowSearch(!showSearch);
+                setSearchQuery("");
+              }}
               style={btnStyle}
               title="Search"
             >
               <Search size={16} />
             </button>
-            <div style={{ width: 1, height: 16, background: "#e5e7eb" }} />
-            <button onClick={onToggleFullscreen} style={btnStyle} title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
+            <div style={{ width: 1, height: 16, background: "rgba(51, 65, 85, 0.5)" }} />
+            <button
+              onClick={onToggleFullscreen}
+              style={btnStyle}
+              title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+            >
               {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
             </button>
           </div>
@@ -675,9 +1331,15 @@ function GraphContent({
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        onNodesChange={onNodesChange}
+        onEdgesChange={onEdgesChange}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
-        onNodeClick={onNodeClick}
+        onNodeClick={(e, node) => {
+          setSelectedEdge(null);
+          onNodeClick(e, node);
+        }}
+        onEdgeClick={onEdgeClick}
         nodesDraggable
         nodesConnectable={false}
         elevateNodesOnSelect
@@ -688,67 +1350,102 @@ function GraphContent({
         proOptions={{ hideAttribution: true }}
         className="graph-db-view"
         defaultEdgeOptions={{ zIndex: 0 }}
-        style={{ background: "#fafbfc" }}
+        style={{ background: "#0b0f1a" }}
       >
         <Background
           id="graph-grid"
           variant={BackgroundVariant.Dots}
           gap={30}
-          size={0.8}
-          color="#e2e8f0"
+          size={0.6}
+          color="rgba(99, 102, 241, 0.08)"
         />
         <MiniMap
           position="bottom-left"
           pannable
           zoomable
           nodeStrokeWidth={1}
-          nodeStrokeColor="#e5e7eb"
+          nodeStrokeColor="rgba(99, 102, 241, 0.3)"
           nodeColor={(n) => {
             const stance = (n.data as AgentNodeData | undefined)?.stance ?? "neutral";
             return stanceConfig[stance]?.color ?? stanceConfig.neutral.color;
           }}
-          maskColor="rgba(250, 251, 252, 0.85)"
-          style={{ width: 120, height: 80, margin: 60, marginBottom: 12 }}
+          maskColor="rgba(11, 15, 26, 0.85)"
+          style={{ width: 130, height: 90, margin: 60, marginBottom: 12 }}
         />
       </ReactFlow>
 
       <div className="graph-db-legend">
-        <div className="graph-db-legend-title">Entity Types</div>
+        <div className="graph-db-legend-title">Stance Types</div>
         <div className="graph-db-legend-items">
           {Object.entries(stanceConfig).map(([stance, cfg]) => (
             <div key={stance} style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <div style={{ width: 10, height: 10, borderRadius: "50%", background: cfg.color }} />
-              <span style={{ fontSize: 12, color: "#374151", fontWeight: 500 }}>{cfg.label}</span>
+              <div
+                style={{
+                  width: 10,
+                  height: 10,
+                  borderRadius: "50%",
+                  background: cfg.color,
+                  boxShadow: `0 0 8px ${cfg.glow}`,
+                }}
+              />
+              <span style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 500 }}>{cfg.label}</span>
             </div>
           ))}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginLeft: 8 }}>
+            <MessageSquare size={10} style={{ color: "#818cf8" }} />
+            <span style={{ fontSize: 12, color: "#cbd5e1", fontWeight: 500 }}>Has conversation</span>
+          </div>
         </div>
       </div>
 
       <div className="graph-db-stats">
         <div className="graph-db-stat-chip">
-          {graph.nodes.length} nodes
+          {progressiveActive
+            ? `${graph.nodes.length} / ${totalAgentCount} agents visible`
+            : `${graph.nodes.length} nodes`}
         </div>
-        <div className="graph-db-stat-chip">
-          {graph.edges.length} relationships
-        </div>
+        <div className="graph-db-stat-chip">{graph.edges.length} relationships</div>
       </div>
 
-      {selected && (
+      {selected && !selectedEdge && (
         <InspectorPanel
           selected={selected}
           outgoing={outgoing}
           incoming={incoming}
-          selectedPosts={selectedPosts}
-          selectedComments={selectedComments}
+          posts={graph.posts}
+          comments={graph.comments}
           allNodes={graph.nodes}
           onClose={() => onNodeClick({} as React.MouseEvent, { id: "" } as Node)}
+        />
+      )}
+
+      {selectedEdge && edgeSourceNode && edgeTargetNode && (
+        <ConversationPanel
+          sourceNode={edgeSourceNode}
+          targetNode={edgeTargetNode}
+          conversations={edgeConversations}
+          onClose={() => setSelectedEdge(null)}
         />
       )}
     </>
   );
 }
 
-export function SimulationNetworkPanel({ simulationId }: { simulationId: number }) {
+/* ─── Main Export ─── */
+
+export function SimulationNetworkPanel({
+  simulationId,
+  streamHighlightAgentId = null,
+  streamPhase = "idle",
+  progressiveRevealAgentIds = null,
+}: {
+  simulationId: number;
+  /** From simulation run-stream SSE: agent whose content was just generated (generation phase). */
+  streamHighlightAgentId?: number | null;
+  streamPhase?: string;
+  /** `null` = full graph. During a round, ids of agents that have emitted `agent_action` so far (starts `[]`). */
+  progressiveRevealAgentIds?: number[] | null;
+}) {
   const graphQueryEnabled =
     Number.isFinite(simulationId) && simulationId > 0 && !Number.isNaN(simulationId);
   const graphQueryOptions = getGetSimulationGraphQueryOptions(simulationId);
@@ -761,6 +1458,8 @@ export function SimulationNetworkPanel({ simulationId }: { simulationId: number 
   } = useQuery({
     ...graphQueryOptions,
     enabled: graphQueryEnabled,
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -781,32 +1480,71 @@ export function SimulationNetworkPanel({ simulationId }: { simulationId: number 
     } else {
       document.body.style.overflow = "";
     }
-    return () => { document.body.style.overflow = ""; };
+    return () => {
+      document.body.style.overflow = "";
+    };
   }, [isFullscreen]);
 
   const dims = { w: 1000, h: 800 };
 
-  const nodes = useMemo(() => {
-    if (!graph?.nodes.length) return [];
-    return layoutGraphForce(graph.nodes, graph.edges, dims.w, dims.h);
-  }, [graph?.nodes, graph?.edges]);
+  const viewGraph = useMemo(() => {
+    if (!graph) return null;
+    if (progressiveRevealAgentIds == null) return graph;
+    const idSet = new Set(progressiveRevealAgentIds);
+    return {
+      ...graph,
+      nodes: graph.nodes.filter((n) => idSet.has(n.id)),
+      edges: graph.edges.filter((e) => idSet.has(e.source) && idSet.has(e.target)),
+    };
+  }, [graph, progressiveRevealAgentIds]);
 
-  const edges = useMemo(
-    () => (graph?.edges.length ? buildEdges(graph.edges, showEdgeLabels) : []),
-    [graph?.edges, showEdgeLabels],
+  const progressiveActive = progressiveRevealAgentIds != null;
+  const waitingForStreamAgents =
+    progressiveRevealAgentIds !== null &&
+    progressiveRevealAgentIds.length === 0 &&
+    (graph?.nodes.length ?? 0) > 0;
+
+  useEffect(() => {
+    if (waitingForStreamAgents) setSelectedId(null);
+  }, [waitingForStreamAgents]);
+
+  const initialNodes = useMemo(() => {
+    if (!viewGraph?.nodes.length) return [];
+    return layoutGraphForce(viewGraph.nodes, viewGraph.edges, dims.w, dims.h);
+  }, [viewGraph?.nodes, viewGraph?.edges]);
+
+  const initialEdges = useMemo(
+    () =>
+      viewGraph?.edges.length
+        ? buildEdges(
+            viewGraph.edges,
+            showEdgeLabels,
+            viewGraph.nodes,
+            viewGraph.posts,
+            viewGraph.comments,
+          )
+        : [],
+    [viewGraph, showEdgeLabels],
   );
 
-  const onNodeClick = useCallback(
-    (_: React.MouseEvent, node: Node) => {
-      const id = Number(node.id);
-      setSelectedId((prev) => (prev === id || !id ? null : id));
-    },
-    [],
-  );
+  const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => {
+    const id = Number(node.id);
+    setSelectedId((prev) => (prev === id || !id ? null : id));
+  }, []);
 
   if (!graphQueryEnabled) {
     return (
-      <div style={{ borderRadius: 12, border: "1px solid #e5e7eb", background: "#fff", padding: 40, textAlign: "center", color: "#9ca3af", fontSize: 14 }}>
+      <div
+        style={{
+          borderRadius: 16,
+          border: "1px solid rgba(99, 102, 241, 0.15)",
+          background: "#0b0f1a",
+          padding: 40,
+          textAlign: "center",
+          color: "#64748b",
+          fontSize: 14,
+        }}
+      >
         Invalid simulation id. Open a simulation from the list.
       </div>
     );
@@ -814,14 +1552,28 @@ export function SimulationNetworkPanel({ simulationId }: { simulationId: number 
 
   if (isLoading || (isFetching && !graph)) {
     return (
-      <div style={{ height: 600, borderRadius: 12, border: "1px solid #e5e7eb", background: "#fafbfc", display: "flex", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 14 }}>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+      <div
+        style={{
+          height: 600,
+          borderRadius: 16,
+          border: "1px solid rgba(99, 102, 241, 0.15)",
+          background: "#0b0f1a",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#64748b",
+          fontSize: 14,
+        }}
+      >
+        <div
+          style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}
+        >
           <div
             style={{
               width: 36,
               height: 36,
               borderRadius: "50%",
-              border: "3px solid #e5e7eb",
+              border: "3px solid rgba(99, 102, 241, 0.2)",
               borderTopColor: "#6366f1",
               animation: "spin 1s linear infinite",
             }}
@@ -837,16 +1589,44 @@ export function SimulationNetworkPanel({ simulationId }: { simulationId: number 
     const err = error as unknown;
     const detail = err instanceof Error ? err.message : String(err ?? "Unknown error");
     return (
-      <div style={{ borderRadius: 12, border: "1px solid #fecaca", background: "#fef2f2", padding: 24 }}>
-        <div style={{ fontSize: 14, fontWeight: 600, color: "#ef4444", marginBottom: 8 }}>Could not load graph data</div>
-        <div style={{ fontSize: 12, color: "#6b7280", fontFamily: "ui-monospace, monospace", wordBreak: "break-all" }}>{detail}</div>
+      <div
+        style={{
+          borderRadius: 16,
+          border: "1px solid rgba(239, 68, 68, 0.3)",
+          background: "rgba(127, 29, 29, 0.15)",
+          padding: 24,
+        }}
+      >
+        <div style={{ fontSize: 14, fontWeight: 600, color: "#ef4444", marginBottom: 8 }}>
+          Could not load graph data
+        </div>
+        <div
+          style={{
+            fontSize: 12,
+            color: "#94a3b8",
+            fontFamily: "ui-monospace, monospace",
+            wordBreak: "break-all",
+          }}
+        >
+          {detail}
+        </div>
       </div>
     );
   }
 
   if (!graph) {
     return (
-      <div style={{ borderRadius: 12, border: "1px solid #e5e7eb", background: "#fafbfc", padding: 40, textAlign: "center", color: "#9ca3af", fontSize: 14 }}>
+      <div
+        style={{
+          borderRadius: 16,
+          border: "1px solid rgba(99, 102, 241, 0.15)",
+          background: "#0b0f1a",
+          padding: 40,
+          textAlign: "center",
+          color: "#64748b",
+          fontSize: 14,
+        }}
+      >
         No graph data returned.
       </div>
     );
@@ -855,22 +1635,80 @@ export function SimulationNetworkPanel({ simulationId }: { simulationId: number 
   return (
     <div className={isFullscreen ? "graph-db-fullscreen" : ""}>
       <div className="graph-db-container" style={{ height: isFullscreen ? "100vh" : 680 }}>
-        {nodes.length === 0 ? (
-          <div style={{ display: "flex", height: "100%", alignItems: "center", justifyContent: "center", color: "#9ca3af", fontSize: 14 }}>
+        {!graph.nodes.length ? (
+          <div
+            style={{
+              display: "flex",
+              height: "100%",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#64748b",
+              fontSize: 14,
+            }}
+          >
+            No agents in this simulation.
+          </div>
+        ) : waitingForStreamAgents ? (
+          <div
+            className="graph-progressive-wait"
+            style={{
+              display: "flex",
+              flexDirection: "column",
+              height: "100%",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#94a3b8",
+              fontSize: 14,
+              textAlign: "center",
+              padding: 32,
+              gap: 12,
+            }}
+          >
+            <div
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: "50%",
+                border: "3px solid rgba(99, 102, 241, 0.2)",
+                borderTopColor: "#22d3ee",
+                animation: "spin 0.9s linear infinite",
+              }}
+            />
+            <div style={{ fontWeight: 600, color: "#e2e8f0" }}>Round in progress</div>
+            <div style={{ maxWidth: 360, lineHeight: 1.55, fontSize: 13 }}>
+              The graph starts empty. Each agent appears here as soon as their response is generated (live SSE).
+            </div>
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+          </div>
+        ) : initialNodes.length === 0 ? (
+          <div
+            style={{
+              display: "flex",
+              height: "100%",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "#64748b",
+              fontSize: 14,
+            }}
+          >
             No agents in this simulation.
           </div>
         ) : (
           <ReactFlowProvider>
             <GraphContent
-              nodes={nodes}
-              edges={edges}
+              initialNodes={initialNodes}
+              initialEdges={initialEdges}
               onNodeClick={onNodeClick}
               selectedId={selectedId}
-              graph={graph}
+              graph={viewGraph!}
+              totalAgentCount={graph.nodes.length}
+              progressiveActive={progressiveActive}
               isFullscreen={isFullscreen}
               onToggleFullscreen={() => setIsFullscreen(!isFullscreen)}
               showEdgeLabels={showEdgeLabels}
               onToggleEdgeLabels={() => setShowEdgeLabels(!showEdgeLabels)}
+              streamHighlightAgentId={streamHighlightAgentId}
+              streamPhase={streamPhase}
             />
           </ReactFlowProvider>
         )}

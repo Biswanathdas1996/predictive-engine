@@ -4,6 +4,7 @@
   "license": "MIT",
   "scripts": {
     "preinstall": "node ./scripts/enforce-pnpm.cjs",
+    "secrets:export": "python ./scripts/local_secrets_export_dotenv.py",
     "db:push": "pnpm --filter @workspace/db push",
     "db:reset": "pnpm --filter @workspace/db reset-db",
     "build": "pnpm run typecheck && pnpm -r --if-present run build",

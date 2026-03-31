@@ -50,8 +50,8 @@ async def create_agent(body: dict) -> dict:
             """INSERT INTO agents (
             name, age, gender, region, occupation, persona, stance,
             influence_score, credibility_score, belief_state, confidence_level,
-            activity_level, group_id, simulation_id
-            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14)
+            activity_level, group_id, simulation_id, system_prompt
+            ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13,$14,$15)
             RETURNING *""",
             body["name"],
             int(body["age"]),
@@ -67,6 +67,7 @@ async def create_agent(body: dict) -> dict:
             float(body.get("activityLevel", 0.5)),
             body.get("groupId"),
             body.get("simulationId"),
+            body.get("systemPrompt"),
         )
     out = agent_row(row)
     asyncio.create_task(neo4j_service.sync_agent_to_graph(out))

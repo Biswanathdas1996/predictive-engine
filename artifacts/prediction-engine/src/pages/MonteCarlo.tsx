@@ -1,36 +1,73 @@
-import { useState } from "react";
+import { useState, useCallback, useRef } from "react";
 import {
   useListSimulations,
-  useRunMonteCarlo,
   useGetMonteCarloRuns,
   type Simulation,
 } from "@workspace/api-client-react";
-import { BarChart2, Zap, Settings, AlertTriangle } from "lucide-react";
+import { BarChart2, Zap, Settings, AlertTriangle, Radio } from "lucide-react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Cell } from 'recharts';
 import { formatScore, formatPercent, normalizeApiArray } from "@/lib/utils";
+import { consumeSSEStream, type SSEEvent } from "@/lib/sse";
 
 export default function MonteCarlo() {
   const { data: simulations } = useListSimulations();
   const simulationList = normalizeApiArray<Simulation>(simulations);
-  const runMC = useRunMonteCarlo();
-  
+
   const [selectedSim, setSelectedSim] = useState<string>("");
   const [config, setConfig] = useState({ numRuns: 100, roundsPerRun: 10 });
   const [result, setResult] = useState<any>(null);
+
+  // Streaming state
+  const [isRunning, setIsRunning] = useState(false);
+  const [streamMessage, setStreamMessage] = useState("");
+  const [streamProgress, setStreamProgress] = useState<{ current: number; total: number } | null>(null);
+  const [latestSupport, setLatestSupport] = useState<number | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const { data: history } = useGetMonteCarloRuns(parseInt(selectedSim), {
     query: { enabled: !!selectedSim } as any
   });
 
-  const handleRun = () => {
-    if (!selectedSim) return;
-    runMC.mutate({ 
-      simulationId: parseInt(selectedSim), 
-      data: config 
-    }, {
-      onSuccess: (data) => setResult(data)
+  const handleRun = useCallback(() => {
+    if (!selectedSim || isRunning) return;
+    setIsRunning(true);
+    setResult(null);
+    setStreamMessage("Starting Monte Carlo...");
+    setStreamProgress(null);
+    setLatestSupport(null);
+
+    const abort = new AbortController();
+    abortRef.current = abort;
+
+    consumeSSEStream({
+      url: `/api/montecarlo/${selectedSim}/stream`,
+      body: config,
+      signal: abort.signal,
+      onEvent: (event: SSEEvent) => {
+        if (event.type === "status") {
+          const e = event as SSEEvent & { message?: string };
+          if (e.message) setStreamMessage(e.message);
+        } else if (event.type === "mc_progress") {
+          const e = event as SSEEvent & { current: number; total: number; latestSupport: number };
+          setStreamProgress({ current: e.current, total: e.total });
+          setLatestSupport(e.latestSupport);
+          setStreamMessage(`Run ${e.current}/${e.total} — latest support: ${e.latestSupport.toFixed(3)}`);
+        } else if (event.type === "complete") {
+          const e = event as SSEEvent & { result: any };
+          setResult(e.result);
+          setStreamMessage("Complete!");
+        }
+      },
+      onError: (msg) => {
+        setStreamMessage(`Error: ${msg}`);
+      },
+      onDone: () => {
+        setIsRunning(false);
+      },
     });
-  };
+  }, [selectedSim, config, isRunning]);
+
+  const progressPct = streamProgress ? Math.round((streamProgress.current / streamProgress.total) * 100) : 0;
 
   // Process distribution for histogram
   const histogramData = result?.distribution ? (() => {
@@ -38,7 +75,7 @@ export default function MonteCarlo() {
     const min = -1;
     const max = 1;
     const step = (max - min) / bins;
-    
+
     const counts = Array(bins).fill(0);
     result.distribution.forEach((r: any) => {
       let binIndex = Math.floor((r.policySupport - min) / step);
@@ -74,10 +111,11 @@ export default function MonteCarlo() {
           <div className="space-y-5">
             <div className="space-y-2">
               <label className="text-sm font-medium text-foreground">Target Simulation Model</label>
-              <select 
-                value={selectedSim} 
+              <select
+                value={selectedSim}
                 onChange={(e) => setSelectedSim(e.target.value)}
                 className="w-full bg-background border border-border rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50"
+                disabled={isRunning}
               >
                 <option value="">Select a model...</option>
                 {simulationList.map(s => (
@@ -91,10 +129,11 @@ export default function MonteCarlo() {
                 <label className="text-sm font-medium text-foreground">Number of Branches (Runs)</label>
                 <span className="text-xs font-mono text-primary">{config.numRuns}</span>
               </div>
-              <input 
+              <input
                 type="range" min="10" max="500" step="10"
                 value={config.numRuns} onChange={(e) => setConfig({...config, numRuns: parseInt(e.target.value)})}
                 className="w-full accent-primary"
+                disabled={isRunning}
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
                 <span>Fast (10)</span>
@@ -107,41 +146,89 @@ export default function MonteCarlo() {
                 <label className="text-sm font-medium text-foreground">Rounds per Branch</label>
                 <span className="text-xs font-mono text-primary">{config.roundsPerRun}</span>
               </div>
-              <input 
+              <input
                 type="range" min="1" max="50" step="1"
                 value={config.roundsPerRun} onChange={(e) => setConfig({...config, roundsPerRun: parseInt(e.target.value)})}
                 className="w-full"
+                disabled={isRunning}
               />
             </div>
 
             <div className="pt-6 border-t border-border/50">
-              <button 
+              <button
                 onClick={handleRun}
-                disabled={!selectedSim || runMC.isPending}
+                disabled={!selectedSim || isRunning}
                 className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-primary to-accent text-white px-4 py-3 rounded-xl font-bold shadow-[0_0_20px_rgba(139,92,246,0.3)] hover:shadow-[0_0_30px_rgba(139,92,246,0.5)] disabled:opacity-50 disabled:shadow-none transition-all"
               >
-                {runMC.isPending ? (
+                {isRunning ? (
                   <><Zap className="w-5 h-5 animate-pulse" /> Computing Tensor...</>
                 ) : (
                   <><Zap className="w-5 h-5" /> Execute Monte Carlo</>
                 )}
               </button>
             </div>
+
+            {/* Live Stream Status */}
+            {isRunning && (
+              <div className="rounded-xl border border-primary/30 bg-primary/5 p-4 space-y-3">
+                <div className="flex items-center gap-2 text-sm">
+                  <Radio className="w-4 h-4 text-primary animate-pulse" />
+                  <span className="font-medium text-primary">Running...</span>
+                </div>
+                <p className="text-xs text-muted-foreground font-mono">{streamMessage}</p>
+                {streamProgress && (
+                  <div className="space-y-1.5">
+                    <div className="flex items-center gap-3">
+                      <div className="flex-1 h-2 bg-secondary rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-300 rounded-full"
+                          style={{ width: `${progressPct}%` }}
+                        />
+                      </div>
+                      <span className="text-xs font-mono text-muted-foreground w-16 text-right">
+                        {progressPct}%
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[10px] text-muted-foreground">
+                      <span>Run {streamProgress.current}/{streamProgress.total}</span>
+                      {latestSupport !== null && (
+                        <span className={latestSupport > 0 ? "text-emerald-400" : "text-destructive"}>
+                          Latest: {formatScore(latestSupport)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
         {/* Results Panel */}
         <div className="lg:col-span-2 space-y-6">
-          {!result && !runMC.isPending ? (
+          {!result && !isRunning ? (
             <div className="bg-card border border-border border-dashed rounded-2xl h-full min-h-[400px] flex flex-col items-center justify-center text-muted-foreground">
               <BarChart2 className="w-16 h-16 opacity-20 mb-4" />
               <p>Select a model and execute to view probabilistic outcomes.</p>
             </div>
-          ) : runMC.isPending ? (
+          ) : isRunning && !result ? (
             <div className="bg-card border border-primary/30 rounded-2xl h-full min-h-[400px] flex flex-col items-center justify-center relative overflow-hidden">
               <div className="absolute inset-0 bg-primary/5 animate-pulse" />
               <div className="w-16 h-16 border-4 border-primary/20 border-t-primary rounded-full animate-spin mb-4" />
               <p className="text-primary font-mono animate-pulse">Running {config.numRuns} parallel futures...</p>
+              {streamProgress && (
+                <div className="mt-4 w-64">
+                  <div className="h-2 bg-secondary rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary transition-all duration-300 rounded-full"
+                      style={{ width: `${progressPct}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground text-center mt-2 font-mono">
+                    {streamProgress.current}/{streamProgress.total} runs complete
+                  </p>
+                </div>
+              )}
             </div>
           ) : (
             <>
@@ -174,7 +261,7 @@ export default function MonteCarlo() {
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
                       <XAxis dataKey="label" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
                       <YAxis stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-                      <RechartsTooltip 
+                      <RechartsTooltip
                         cursor={{fill: 'hsl(var(--secondary)/0.5)'}}
                         contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
                       />

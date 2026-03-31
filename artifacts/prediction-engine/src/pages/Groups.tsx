@@ -1,7 +1,12 @@
 import { useState } from "react";
-import { createGroup, useListGroups, type Group } from "@workspace/api-client-react";
+import {
+  createGroup,
+  useCreateGroupWithAgents,
+  useListGroups,
+  type Group,
+} from "@workspace/api-client-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Network, Plus, X } from "lucide-react";
+import { Network, Plus, Sparkles, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { normalizeApiArray } from "@/lib/utils";
 import { toast } from "@/hooks/use-toast";
@@ -12,20 +17,23 @@ export default function Groups() {
   const groupList = normalizeApiArray<Group>(groups);
 
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [emptyGroupOnly, setEmptyGroupOnly] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [agentCount, setAgentCount] = useState(24);
+  const [demographics, setDemographics] = useState("");
+  const [community, setCommunity] = useState("");
+  const [educationProfession, setEducationProfession] = useState("");
 
-  const saveGroup = useMutation({
+  const saveEmptyGroup = useMutation({
     mutationFn: (input: { name: string; description: string }) =>
       createGroup({
         name: input.name,
-        description: input.description,
+        description: input.description || "",
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/groups"] });
-      setIsDialogOpen(false);
-      setName("");
-      setDescription("");
+      resetDialog();
       toast({ title: "Group created" });
     },
     onError: (err) => {
@@ -39,18 +47,75 @@ export default function Groups() {
     },
   });
 
+  const saveCohort = useCreateGroupWithAgents({
+    mutation: {
+      onSuccess: (res) => {
+        queryClient.invalidateQueries({ queryKey: ["/api/groups"] });
+        resetDialog();
+        toast({
+          title: "Cohort created",
+          description: `${res.agentsCreated} agents added to “${res.group.name}”.`,
+        });
+      },
+      onError: (err) => {
+        const message =
+          err instanceof Error ? err.message : "Something went wrong.";
+        toast({
+          variant: "destructive",
+          title: "Could not create cohort",
+          description: message,
+        });
+      },
+    },
+  });
+
   const resetDialog = () => {
     setIsDialogOpen(false);
+    setEmptyGroupOnly(false);
     setName("");
     setDescription("");
+    setAgentCount(24);
+    setDemographics("");
+    setCommunity("");
+    setEducationProfession("");
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const n = name.trim();
     if (!n) return;
-    saveGroup.mutate({ name: n, description: description.trim() });
+
+    if (emptyGroupOnly) {
+      saveEmptyGroup.mutate({ name: n, description: description.trim() });
+      return;
+    }
+
+    const ac = Math.max(1, Math.min(500, Math.floor(agentCount)));
+    const demo = demographics.trim();
+    const comm = community.trim();
+    const edu = educationProfession.trim();
+    if (!demo || !comm || !edu) {
+      toast({
+        variant: "destructive",
+        title: "Missing fields",
+        description: "Fill demographics, community, and education / profession.",
+      });
+      return;
+    }
+
+    saveCohort.mutate({
+      data: {
+        name: n,
+        description: description.trim() || undefined,
+        agentCount: ac,
+        demographics: demo,
+        community: comm,
+        educationProfession: edu,
+      },
+    });
   };
+
+  const pending = saveEmptyGroup.isPending || saveCohort.isPending;
 
   return (
     <div className="space-y-6">
@@ -60,7 +125,9 @@ export default function Groups() {
             <Network className="w-8 h-8 text-accent" />
             Agent Groups
           </h1>
-          <p className="text-muted-foreground mt-1">Demographic and ideological clusters.</p>
+          <p className="text-muted-foreground mt-1">
+            LLM-generated cohorts with shared community context; link them into simulations.
+          </p>
         </div>
         <button
           type="button"
@@ -92,48 +159,53 @@ export default function Groups() {
               className="bg-card border border-border p-6 rounded-2xl shadow-sm hover:border-accent/50 transition-all"
             >
               <h3 className="text-xl font-bold mb-2 text-foreground">{group.name}</h3>
-              <p className="text-sm text-muted-foreground">{group.description}</p>
+              <p className="text-sm text-muted-foreground line-clamp-4">{group.description}</p>
+              {group.poolAgentCount != null && (
+                <p className="mt-3 text-xs font-mono text-accent">
+                  Pool: {group.poolAgentCount} agent{group.poolAgentCount === 1 ? "" : "s"} ready for simulations
+                </p>
+              )}
             </div>
           ))
         )}
       </div>
 
       {isDialogOpen && (
-        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
           <motion.div
             initial={{ scale: 0.95, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-card border border-border shadow-2xl rounded-2xl w-full max-w-lg overflow-hidden"
+            className="bg-card border border-border shadow-2xl rounded-2xl w-full max-w-lg overflow-hidden my-8"
           >
             <div className="p-6 border-b border-border flex justify-between items-center">
-              <h2 className="text-xl font-bold">New group</h2>
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-accent" />
+                <h2 className="text-xl font-bold">New agent group</h2>
+              </div>
               <button
                 type="button"
-                onClick={resetDialog}
+                onClick={() => !pending && resetDialog()}
                 className="text-muted-foreground hover:text-foreground"
                 aria-label="Close"
+                disabled={pending}
               >
-                ✕
+                <X className="w-5 h-5" />
               </button>
             </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              <div className="rounded-xl border border-border/80 bg-secondary/20 px-3 py-2.5 text-xs text-muted-foreground leading-relaxed">
-                <p className="font-medium text-foreground/80 mb-1">Examples</p>
-                <p>
-                  <span className="text-foreground/70">Name:</span>{" "}
-                  <span className="font-mono text-[11px]">Coastal climate advocates</span>
-                </p>
-                <p className="mt-1">
-                  <span className="text-foreground/70">Description:</span> Homeowners and
-                  small-business owners in seaboard metros; high concern for flooding and
-                  insurance costs; active on local news and community boards.
-                </p>
-              </div>
+            <form onSubmit={handleSubmit} className="p-6 space-y-4 max-h-[min(70vh,640px)] overflow-y-auto">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={emptyGroupOnly}
+                  onChange={(e) => setEmptyGroupOnly(e.target.checked)}
+                  disabled={pending}
+                  className="rounded border-border"
+                />
+                <span className="text-muted-foreground">Empty group only (no agents yet)</span>
+              </label>
+
               <div className="space-y-1.5">
-                <label
-                  className="text-sm font-medium text-muted-foreground"
-                  htmlFor="group-name"
-                >
+                <label className="text-sm font-medium text-muted-foreground" htmlFor="group-name">
                   Name
                 </label>
                 <input
@@ -142,41 +214,113 @@ export default function Groups() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/50"
-                  placeholder="Coastal climate advocates"
+                  placeholder="e.g. Riverside parent–teacher network"
                   autoComplete="off"
+                  disabled={pending}
                 />
               </div>
+
               <div className="space-y-1.5">
-                <label
-                  className="text-sm font-medium text-muted-foreground"
-                  htmlFor="group-description"
-                >
-                  Description
+                <label className="text-sm font-medium text-muted-foreground" htmlFor="group-description">
+                  Short description <span className="text-xs font-normal">(optional)</span>
                 </label>
                 <textarea
                   id="group-description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  rows={3}
-                  className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/50 min-h-[80px] resize-y"
-                  placeholder="Who they are, what they care about, and where they show up (media, geography, demographics)…"
+                  rows={2}
+                  className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent/50 min-h-[64px] resize-y"
+                  placeholder="One-line summary for cards and reports…"
+                  disabled={pending}
                 />
               </div>
+
+              {!emptyGroupOnly && (
+                <>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-muted-foreground" htmlFor="agent-count">
+                      How many agents
+                    </label>
+                    <input
+                      id="agent-count"
+                      type="number"
+                      min={1}
+                      max={500}
+                      required
+                      value={agentCount}
+                      onChange={(e) => setAgentCount(parseInt(e.target.value, 10) || 1)}
+                      className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:border-accent"
+                      disabled={pending}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-muted-foreground" htmlFor="demographics">
+                      Demographics
+                    </label>
+                    <textarea
+                      id="demographics"
+                      required={!emptyGroupOnly}
+                      value={demographics}
+                      onChange={(e) => setDemographics(e.target.value)}
+                      rows={3}
+                      className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-accent min-h-[72px] resize-y"
+                      placeholder="Age bands, income mix, family structure, languages, etc."
+                      disabled={pending}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-muted-foreground" htmlFor="community">
+                      Community
+                    </label>
+                    <textarea
+                      id="community"
+                      required={!emptyGroupOnly}
+                      value={community}
+                      onChange={(e) => setCommunity(e.target.value)}
+                      rows={3}
+                      className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-accent min-h-[72px] resize-y"
+                      placeholder="Neighborhood, online spaces, organizations, how they know each other…"
+                      disabled={pending}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium text-muted-foreground" htmlFor="edu-prof">
+                      Education, qualifications &amp; profession mix
+                    </label>
+                    <textarea
+                      id="edu-prof"
+                      required={!emptyGroupOnly}
+                      value={educationProfession}
+                      onChange={(e) => setEducationProfession(e.target.value)}
+                      rows={3}
+                      className="w-full bg-secondary/50 border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-accent min-h-[72px] resize-y"
+                      placeholder="Degree levels, trades, employment sectors, career stages…"
+                      disabled={pending}
+                    />
+                  </div>
+                  <div className="rounded-xl border border-border/80 bg-secondary/20 px-3 py-2.5 text-xs text-muted-foreground leading-relaxed">
+                    The model invents distinct personas, belief priors, and per-agent behavioral system prompts
+                    so they stay in character during simulation rounds. If the LLM is unavailable, templated
+                    agents are still created from your specs.
+                  </div>
+                </>
+              )}
+
               <div className="flex justify-end gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={resetDialog}
+                  onClick={() => !pending && resetDialog()}
                   className="px-4 py-2 rounded-xl text-sm font-medium text-muted-foreground hover:bg-secondary transition-colors"
-                  disabled={saveGroup.isPending}
+                  disabled={pending}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={saveGroup.isPending}
+                  disabled={pending}
                   className="px-6 py-2 bg-accent text-accent-foreground rounded-xl text-sm font-medium hover:opacity-90 disabled:opacity-50"
                 >
-                  {saveGroup.isPending ? "Saving…" : "Create group"}
+                  {pending ? "Working…" : emptyGroupOnly ? "Create empty group" : "Generate cohort"}
                 </button>
               </div>
             </form>

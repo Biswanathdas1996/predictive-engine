@@ -8,7 +8,7 @@ export const eventsTable = pgTable("events", {
   type: text("type").notNull(),
   description: text("description").notNull(),
   impactScore: real("impact_score").notNull().default(0.5),
-  simulationId: integer("simulation_id").references(() => simulationsTable.id),
+  simulationId: integer("simulation_id").references(() => simulationsTable.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

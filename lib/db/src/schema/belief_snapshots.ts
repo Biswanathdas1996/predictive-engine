@@ -5,7 +5,7 @@ import { simulationsTable } from "./simulations";
 
 export const beliefSnapshotsTable = pgTable("belief_snapshots", {
   id: serial("id").primaryKey(),
-  simulationId: integer("simulation_id").notNull().references(() => simulationsTable.id),
+  simulationId: integer("simulation_id").notNull().references(() => simulationsTable.id, { onDelete: "cascade" }),
   round: integer("round").notNull(),
   averagePolicySupport: real("average_policy_support").notNull(),
   averageTrustInGovernment: real("average_trust_in_government").notNull(),

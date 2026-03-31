@@ -175,7 +175,7 @@ const layers = [
     icon: Network,
     items: [
       "neo4j_service mirrors simulation posts and comments into a property graph when NEO4J_* env vars are set; UI reads graph views via API.",
-      "llm_service targets Ollama (OLLAMA_BASE_URL, OLLAMA_MODEL) with configurable read timeouts for local CPU inference.",
+      "llm_service calls PwC GenAI (PWC_GENAI_ENDPOINT_URL, API key or bearer token, optional model) for short JSON agent actions; falls back to deterministic content if unavailable.",
     ],
   },
   {

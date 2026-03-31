@@ -46,6 +46,7 @@ export type ServiceStatusLlmBackend =
   | null;
 
 export const ServiceStatusLlmBackend = {
+  pwc_genai: "pwc_genai",
   ollama: "ollama",
   openai_compatible: "openai_compatible",
 } as const;
@@ -73,6 +74,8 @@ export interface Agent {
   region: string;
   occupation: string;
   persona: string;
+  /** @nullable */
+  systemPrompt?: string | null;
   stance: string;
   influenceScore: number;
   credibilityScore: number;
@@ -121,6 +124,11 @@ export interface SimulationConfig {
   agentCount: number;
   /** @nullable */
   policyId?: number | null;
+  /**
+   * Clone pool agents from these groups into the new simulation (ignores template agentCount).
+   * @nullable
+   */
+  groupIds?: number[] | null;
 }
 
 export interface Simulation {
@@ -230,11 +238,34 @@ export interface CreatePolicyBody {
   summary: string;
 }
 
+export type GroupCohortSpec = { [key: string]: unknown };
+
 export interface Group {
   id: number;
   name: string;
   description: string;
+  cohortSpec: GroupCohortSpec;
+  /** Agents in this group not yet assigned to a simulation (pool). */
+  poolAgentCount?: number;
   createdAt: string;
+}
+
+export interface CreateGroupWithAgentsBody {
+  name: string;
+  description?: string;
+  /**
+   * @minimum 1
+   * @maximum 500
+   */
+  agentCount: number;
+  demographics: string;
+  community: string;
+  educationProfession: string;
+}
+
+export interface CreateGroupWithAgentsResponse {
+  group: Group;
+  agentsCreated: number;
 }
 
 export interface CreateGroupBody {

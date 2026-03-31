@@ -12,6 +12,7 @@ export const agentsTable = pgTable("agents", {
   region: text("region").notNull(),
   occupation: text("occupation").notNull(),
   persona: text("persona").notNull(),
+  systemPrompt: text("system_prompt"),
   stance: text("stance").notNull(),
   influenceScore: real("influence_score").notNull().default(0.5),
   credibilityScore: real("credibility_score").notNull().default(0.5),
@@ -22,8 +23,8 @@ export const agentsTable = pgTable("agents", {
   }),
   confidenceLevel: real("confidence_level").notNull().default(0.5),
   activityLevel: real("activity_level").notNull().default(0.5),
-  groupId: integer("group_id").references(() => groupsTable.id),
-  simulationId: integer("simulation_id").references(() => simulationsTable.id),
+  groupId: integer("group_id").references(() => groupsTable.id, { onDelete: "set null" }),
+  simulationId: integer("simulation_id").references(() => simulationsTable.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

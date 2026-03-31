@@ -1,6 +1,6 @@
 import asyncpg
 
-from app.config import DATABASE_URL
+from app.config import DATABASE_URL, DB_POOL_MIN, DB_POOL_MAX
 
 _pool: asyncpg.Pool | None = None
 
@@ -12,7 +12,11 @@ async def init_pool() -> None:
             "DATABASE_URL must be set. Did you forget to provision a database?"
         )
     if _pool is None:
-        _pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+        _pool = await asyncpg.create_pool(
+            DATABASE_URL,
+            min_size=DB_POOL_MIN,
+            max_size=DB_POOL_MAX,
+        )
 
 
 async def close_pool() -> None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 
 class AgentPersona(TypedDict):
@@ -12,6 +12,7 @@ class AgentPersona(TypedDict):
     occupation: str
     persona: str
     stance: str
+    systemPrompt: NotRequired[str | None]
 
 
 class BeliefState(TypedDict):
@@ -26,85 +27,58 @@ class AgentContext(TypedDict, total=False):
     confidenceLevel: float
     graphContextSummary: str
     event: str
+    policyBrief: str
 
 
-class PostContext(TypedDict):
+class PostContext(TypedDict, total=False):
     postContent: str
     persona: AgentPersona
     beliefState: BeliefState
+    policyBrief: str
 
 
 def build_agent_action_prompt(ctx: AgentContext) -> str:
-    persona = ctx["persona"]
+    p = ctx["persona"]
     bs = ctx["beliefState"]
-    event_block = ""
-    if ctx.get("event"):
-        event_block = f"[EXTERNAL EVENT]\n{ctx['event']}\n"
-    return f"""You are a human with the following persona:
-
-[PERSONA]
-{json.dumps(persona, indent=2)}
-
-[CURRENT BELIEF STATE]
-Policy Support: {bs['policySupport']:.3f} (range: -1 to 1)
-Trust in Government: {bs['trustInGovernment']:.3f}
-Economic Outlook: {bs['economicOutlook']:.3f}
-Confidence Level: {ctx['confidenceLevel']:.3f}
-
-[RECENT SOCIAL CONTEXT]
-{ctx['graphContextSummary']}
-
-{event_block}INSTRUCTIONS:
-- Act like a real human, not an AI
-- Be consistent with your personality and beliefs
-- You may change your opinion slightly if influenced
-- Keep responses natural, emotional, and varied
-- Do NOT explain reasoning
-- Keep your post/comment under 280 characters
-
-OUTPUT FORMAT (respond with valid JSON only):
-{{
-  "action": "post" | "comment" | "ignore",
-  "content": "your natural human-like response here",
-  "sentiment": <float between -1 and 1>,
-  "target_post_id": null
-}}"""
+    event_line = f"\nExternal event: {ctx['event']}" if ctx.get("event") else ""
+    policy_block = ""
+    policy_rules = ""
+    if ctx.get("policyBrief"):
+        policy_block = f"\nPOLICY (discuss ONLY this — no other topics):\n{ctx['policyBrief']}\n"
+        policy_rules = (
+            "\nYou must write only about the POLICY above. "
+            "Do not change the subject. Reference a concrete aspect of those key points when you post or comment."
+        )
+    beh = ""
+    sp = p.get("systemPrompt")
+    if sp:
+        beh = f"\nBehavioral instructions (follow closely): {sp}"
+    return f"""Persona: {p['name']}, {p['age']}y {p['gender']}, {p['occupation']} in {p['region']}. Stance: {p['stance']}. Personality: {p['persona']}.{beh}
+Beliefs: policy={bs['policySupport']:.2f} trust={bs['trustInGovernment']:.2f} econ={bs['economicOutlook']:.2f} confidence={ctx['confidenceLevel']:.2f}
+{policy_block}Network: {ctx['graphContextSummary']}{event_line}
+Act as this person on social media. Stay in character. Under 280 chars. No explanations.{policy_rules}
+Reply JSON only: {{"action":"post"|"comment"|"ignore","content":"...","sentiment":<-1 to 1>,"target_post_id":null}}"""
 
 
 def build_agent_reaction_prompt(ctx: PostContext) -> str:
     p = ctx["persona"]
     bs = ctx["beliefState"]
-    return f"""You are reacting to a post on social media.
-
-POST:
-{ctx['postContent']}
-
-YOUR PERSONA:
-Name: {p['name']}
-Age: {p['age']}
-Occupation: {p['occupation']}
-Region: {p['region']}
-Stance: {p['stance']}
-Personality: {p['persona']}
-
-YOUR BELIEFS:
-Policy Support: {bs['policySupport']:.3f}
-Trust in Government: {bs['trustInGovernment']:.3f}
-Economic Outlook: {bs['economicOutlook']:.3f}
-
-INSTRUCTIONS:
-- Do you agree, disagree, or stay neutral?
-- Respond emotionally if it fits your persona
-- Keep it under 280 characters
-- Be authentic to your character
-
-OUTPUT FORMAT (respond with valid JSON only):
-{{
-  "action": "comment",
-  "content": "your reaction here",
-  "sentiment": <float between -1 and 1>,
-  "agreement": "agree" | "disagree" | "neutral"
-}}"""
+    policy_block = ""
+    policy_rules = ""
+    if ctx.get("policyBrief"):
+        policy_block = f"\nPOLICY (discuss ONLY this):\n{ctx['policyBrief']}\n"
+        policy_rules = (
+            "\nYour reply must stay on the POLICY above and respond to the post in that context only."
+        )
+    beh = ""
+    sp = p.get("systemPrompt")
+    if sp:
+        beh = f" Behavioral instructions: {sp}"
+    return f"""Post: "{ctx['postContent']}"
+You: {p['name']}, {p['age']}y {p['occupation']}, {p['region']}. Stance: {p['stance']}. {p['persona']}.{beh}
+Beliefs: policy={bs['policySupport']:.2f} trust={bs['trustInGovernment']:.2f} econ={bs['economicOutlook']:.2f}
+{policy_block}React in character. Under 280 chars. No explanations.{policy_rules}
+Reply JSON only: {{"action":"comment","content":"...","sentiment":<-1 to 1>,"agreement":"agree"|"disagree"|"neutral"}}"""
 
 
 def build_graph_context_summary(

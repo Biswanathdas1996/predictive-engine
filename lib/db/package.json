@@ -8,9 +8,9 @@
     "./schema": "./src/schema/index.ts"
   },
   "scripts": {
-    "push": "node --env-file=../../.env ./node_modules/drizzle-kit/bin.cjs push --config ./drizzle.config.ts",
-    "push-force": "node --env-file=../../.env ./node_modules/drizzle-kit/bin.cjs push --force --config ./drizzle.config.ts",
-    "reset-schema": "node --env-file=../../.env ./scripts/reset-schema.mjs",
+    "push": "python ../../scripts/local_secrets_export_dotenv.py && node --env-file=../../.env --env-file=../../secrets.dotenv ./node_modules/drizzle-kit/bin.cjs push --config ./drizzle.config.ts",
+    "push-force": "python ../../scripts/local_secrets_export_dotenv.py && node --env-file=../../.env --env-file=../../secrets.dotenv ./node_modules/drizzle-kit/bin.cjs push --force --config ./drizzle.config.ts",
+    "reset-schema": "python ../../scripts/local_secrets_export_dotenv.py && node --env-file=../../.env --env-file=../../secrets.dotenv ./scripts/reset-schema.mjs",
     "reset-db": "pnpm run reset-schema && pnpm run push"
   },
   "dependencies": {

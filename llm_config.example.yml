@@ -1,0 +1,20 @@
+# Copy to llm_config.yml at repo root (gitignored if you prefer) or set LLM_CONFIG_PATH.
+# Keys are task_name values passed to call_pwc_genai_async(..., task_name="...").
+
+simulation_agent:
+  model: vertex_ai.gemini-2.5-flash-image
+  temperature: 0.4
+  max_tokens: 128
+
+policy_brief:
+  model: vertex_ai.gemini-2.5-flash-image
+  temperature: 0.2
+  max_tokens: 256
+  timeout: 120
+
+# Bulk JSON cohort for POST /groups/with-agents
+agent_cohort:
+  model: vertex_ai.gemini-2.5-flash-image
+  temperature: 0.65
+  max_tokens: 8192
+  timeout: 180

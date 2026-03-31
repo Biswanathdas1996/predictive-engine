@@ -12,4 +12,9 @@ export interface SimulationConfig {
   agentCount: number;
   /** @nullable */
   policyId?: number | null;
+  /**
+   * Clone pool agents from these groups into the new simulation (ignores template agentCount).
+   * @nullable
+   */
+  groupIds?: number[] | null;
 }

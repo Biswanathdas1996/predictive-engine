@@ -1,18 +1,73 @@
-import { useState } from "react";
-import { useListSimulations, useGetSimulationReport, type Simulation } from "@workspace/api-client-react";
-import { FileText, Target, AlertTriangle, Users, GitMerge, Download } from "lucide-react";
+import { useState, useCallback, useRef } from "react";
+import { useListSimulations, type Simulation } from "@workspace/api-client-react";
+import { FileText, Target, AlertTriangle, Users, GitMerge, Download, Radio } from "lucide-react";
 import { formatPercent, formatScore } from "@/lib/utils";
 import { format } from "date-fns";
 import { normalizeApiArray } from "@/lib/utils";
+import { consumeSSEStream, type SSEEvent } from "@/lib/sse";
+
+interface Report {
+  simulationId: number;
+  simulationName: string;
+  generatedAt: string;
+  keyOutcomes: { label: string; probability: number; impact: string }[];
+  riskFactors: string[];
+  influentialAgents: { agentId: number; name: string; influenceScore: number; stance: string }[];
+  causalDrivers: string[];
+  monteCarloSummary: { totalRuns: number; meanSupport: number; variance: number; confidenceInterval: number[] };
+  beliefEvolution: { round: number; averagePolicySupport: number; averageTrustInGovernment: number; averageEconomicOutlook: number }[];
+}
 
 export default function Reports() {
   const { data: simulations } = useListSimulations();
   const simulationList = normalizeApiArray<Simulation>(simulations);
   const [selectedSim, setSelectedSim] = useState<string>("");
-  
-  const { data: report, isLoading } = useGetSimulationReport(parseInt(selectedSim), {
-    query: { enabled: !!selectedSim } as any
-  });
+
+  // Streaming state
+  const [isLoading, setIsLoading] = useState(false);
+  const [report, setReport] = useState<Report | null>(null);
+  const [streamMessage, setStreamMessage] = useState("");
+  const [streamPhase, setStreamPhase] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
+
+  const loadReport = useCallback((simId: string) => {
+    setSelectedSim(simId);
+    if (!simId) {
+      setReport(null);
+      return;
+    }
+
+    setIsLoading(true);
+    setReport(null);
+    setStreamMessage("Loading...");
+    setStreamPhase("init");
+
+    const abort = new AbortController();
+    abortRef.current = abort;
+
+    consumeSSEStream({
+      url: `/api/reports/${simId}/stream`,
+      method: "GET",
+      signal: abort.signal,
+      onEvent: (event: SSEEvent) => {
+        if (event.type === "status") {
+          const e = event as SSEEvent & { phase?: string; message?: string };
+          if (e.phase) setStreamPhase(e.phase);
+          if (e.message) setStreamMessage(e.message);
+        } else if (event.type === "complete") {
+          const e = event as SSEEvent & { report: Report };
+          setReport(e.report);
+          setStreamMessage("Report generated");
+        }
+      },
+      onError: (msg) => {
+        setStreamMessage(`Error: ${msg}`);
+      },
+      onDone: () => {
+        setIsLoading(false);
+      },
+    });
+  }, []);
 
   return (
     <div className="space-y-6">
@@ -24,19 +79,20 @@ export default function Reports() {
           </h1>
           <p className="text-muted-foreground mt-1">Executive summaries of simulation outcomes and key drivers.</p>
         </div>
-        
+
         <div className="flex items-center gap-3">
-          <select 
-            value={selectedSim} 
-            onChange={(e) => setSelectedSim(e.target.value)}
+          <select
+            value={selectedSim}
+            onChange={(e) => loadReport(e.target.value)}
             className="bg-card border border-border rounded-xl px-4 py-2 text-sm font-medium focus:outline-none focus:border-primary shadow-sm min-w-[250px]"
+            disabled={isLoading}
           >
             <option value="">Select a simulation...</option>
             {simulationList.map(s => (
               <option key={s.id} value={s.id}>{s.name}</option>
             ))}
           </select>
-          <button 
+          <button
             disabled={!report}
             className="flex items-center gap-2 bg-secondary text-secondary-foreground px-4 py-2 rounded-xl font-medium hover:bg-secondary/80 disabled:opacity-50 transition-colors"
           >
@@ -54,6 +110,23 @@ export default function Reports() {
         <div className="h-[60vh] flex flex-col justify-center items-center bg-card rounded-3xl border border-border">
           <div className="w-12 h-12 border-4 border-primary/30 border-t-primary rounded-full animate-spin mb-4" />
           <p className="text-primary font-mono animate-pulse">Synthesizing intelligence...</p>
+          <div className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+            <Radio className="w-4 h-4 text-primary animate-pulse" />
+            <span className="font-mono">{streamMessage}</span>
+          </div>
+          <div className="mt-3 flex gap-1.5">
+            {["init", "agents", "snapshots", "montecarlo", "computing", "risks", "influencers"].map((phase) => (
+              <div
+                key={phase}
+                className={`h-1.5 w-8 rounded-full transition-all duration-500 ${
+                  streamPhase === phase ? "bg-primary scale-110" :
+                  ["init", "agents", "snapshots", "montecarlo", "computing", "risks", "influencers"].indexOf(phase) <
+                  ["init", "agents", "snapshots", "montecarlo", "computing", "risks", "influencers"].indexOf(streamPhase)
+                    ? "bg-primary/40" : "bg-secondary"
+                }`}
+              />
+            ))}
+          </div>
         </div>
       ) : report ? (
         <div className="bg-card border border-border rounded-2xl shadow-xl overflow-hidden print:shadow-none print:border-none">

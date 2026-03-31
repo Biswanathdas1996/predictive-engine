@@ -5,8 +5,8 @@ import { agentsTable } from "./agents";
 
 export const influencesTable = pgTable("influences", {
   id: serial("id").primaryKey(),
-  sourceAgentId: integer("source_agent_id").notNull().references(() => agentsTable.id),
-  targetAgentId: integer("target_agent_id").notNull().references(() => agentsTable.id),
+  sourceAgentId: integer("source_agent_id").notNull().references(() => agentsTable.id, { onDelete: "cascade" }),
+  targetAgentId: integer("target_agent_id").notNull().references(() => agentsTable.id, { onDelete: "cascade" }),
   weight: real("weight").notNull().default(0.5),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

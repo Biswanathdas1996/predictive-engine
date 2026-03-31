@@ -393,6 +393,25 @@ paths:
               schema:
                 $ref: "#/components/schemas/Group"
 
+  /groups/with-agents:
+    post:
+      operationId: createGroupWithAgents
+      tags: [groups]
+      summary: Create a group and LLM-generated pool agents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGroupWithAgentsBody"
+      responses:
+        "201":
+          description: Group and agents created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateGroupWithAgentsResponse"
+
   /montecarlo/{simulationId}:
     post:
       operationId: runMonteCarlo
@@ -542,7 +561,7 @@ components:
         llmBackend:
           type: string
           nullable: true
-          enum: [ollama, openai_compatible]
+          enum: [pwc_genai, ollama, openai_compatible]
         llmModel:
           type: string
           nullable: true
@@ -571,6 +590,8 @@ components:
           type: string
         persona:
           type: string
+        systemPrompt:
+          type: ["string", "null"]
         stance:
           type: string
         influenceScore:
@@ -722,6 +743,11 @@ components:
           type: integer
         policyId:
           type: ["integer", "null"]
+        groupIds:
+          type: ["array", "null"]
+          items:
+            type: integer
+          description: Clone pool agents from these groups into the new simulation (ignores template agentCount).
       required:
         - learningRate
         - numRounds
@@ -988,6 +1014,12 @@ components:
           type: string
         description:
           type: string
+        cohortSpec:
+          type: object
+          additionalProperties: true
+        poolAgentCount:
+          type: integer
+          description: Agents in this group not yet assigned to a simulation (pool).
         createdAt:
           type: string
           format: date-time
@@ -995,7 +1027,43 @@ components:
         - id
         - name
         - description
+        - cohortSpec
         - createdAt
+
+    CreateGroupWithAgentsBody:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        agentCount:
+          type: integer
+          minimum: 1
+          maximum: 500
+        demographics:
+          type: string
+        community:
+          type: string
+        educationProfession:
+          type: string
+      required:
+        - name
+        - agentCount
+        - demographics
+        - community
+        - educationProfession
+
+    CreateGroupWithAgentsResponse:
+      type: object
+      properties:
+        group:
+          $ref: "#/components/schemas/Group"
+        agentsCreated:
+          type: integer
+      required:
+        - group
+        - agentsCreated
 
     CreateGroupBody:
       type: object

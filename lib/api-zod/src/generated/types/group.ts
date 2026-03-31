@@ -5,10 +5,14 @@
  * Policy-Grounded Multi-Agent Prediction Engine API
  * OpenAPI spec version: 0.1.0
  */
+import type { GroupCohortSpec } from "./groupCohortSpec";
 
 export interface Group {
   id: number;
   name: string;
   description: string;
+  cohortSpec: GroupCohortSpec;
+  /** Agents in this group not yet assigned to a simulation (pool). */
+  poolAgentCount?: number;
   createdAt: Date;
 }

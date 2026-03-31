@@ -15,6 +15,8 @@ export interface Agent {
   region: string;
   occupation: string;
   persona: string;
+  /** @nullable */
+  systemPrompt?: string | null;
   stance: string;
   influenceScore: number;
   credibilityScore: number;

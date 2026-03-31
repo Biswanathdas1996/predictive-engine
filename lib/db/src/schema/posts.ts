@@ -11,8 +11,8 @@ export const postsTable = pgTable("posts", {
   platform: text("platform").notNull().default("simulation"),
   topicTags: text("topic_tags").array().notNull().default([]),
   round: integer("round").notNull().default(0),
-  agentId: integer("agent_id").notNull().references(() => agentsTable.id),
-  simulationId: integer("simulation_id").notNull().references(() => simulationsTable.id),
+  agentId: integer("agent_id").notNull().references(() => agentsTable.id, { onDelete: "cascade" }),
+  simulationId: integer("simulation_id").notNull().references(() => simulationsTable.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

@@ -17,14 +17,15 @@ export function formatScore(value: number | undefined | null): string {
 
 /**
  * List endpoints should return a JSON array, but clients may see wrapped shapes
- * ({ data: [...] }) or array-like values without Array.prototype.map. Coerce to a
- * plain Array via Array.from so .map is always safe.
+ * ({ data: [...] }, paginated { items: [...] }) or array-like values without
+ * Array.prototype.map. Coerce to a plain Array via Array.from so .map is always safe.
  */
 export function normalizeApiArray<T>(value: unknown): T[] {
   let candidate: unknown = value;
   if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
-    const data = (candidate as { data?: unknown }).data;
-    if (Array.isArray(data)) candidate = data;
+    const obj = candidate as { data?: unknown; items?: unknown };
+    if (Array.isArray(obj.items)) candidate = obj.items;
+    else if (Array.isArray(obj.data)) candidate = obj.data;
   }
   return Array.isArray(candidate) ? Array.from(candidate as T[]) : [];
 }

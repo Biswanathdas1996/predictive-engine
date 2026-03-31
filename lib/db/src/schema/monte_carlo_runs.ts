@@ -5,7 +5,7 @@ import { simulationsTable } from "./simulations";
 
 export const monteCarloRunsTable = pgTable("monte_carlo_runs", {
   id: serial("id").primaryKey(),
-  simulationId: integer("simulation_id").notNull().references(() => simulationsTable.id),
+  simulationId: integer("simulation_id").notNull().references(() => simulationsTable.id, { onDelete: "cascade" }),
   numRuns: integer("num_runs").notNull(),
   meanSupport: real("mean_support").notNull(),
   variance: real("variance").notNull(),

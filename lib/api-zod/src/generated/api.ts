@@ -24,7 +24,7 @@ export const GetServiceStatusResponse = zod.object({
   database: zod.enum(["connected", "error"]),
   neo4j: zod.enum(["connected", "disabled", "error"]),
   llm: zod.enum(["available", "unavailable"]),
-  llmBackend: zod.enum(["ollama", "openai_compatible"]).nullable(),
+  llmBackend: zod.enum(["pwc_genai", "ollama", "openai_compatible"]).nullable(),
   llmModel: zod.string().nullable(),
 });
 
@@ -43,6 +43,7 @@ export const ListAgentsResponseItem = zod.object({
   region: zod.string(),
   occupation: zod.string(),
   persona: zod.string(),
+  systemPrompt: zod.string().nullish(),
   stance: zod.string(),
   influenceScore: zod.number(),
   credibilityScore: zod.number(),
@@ -100,6 +101,7 @@ export const GetAgentResponse = zod.object({
   region: zod.string(),
   occupation: zod.string(),
   persona: zod.string(),
+  systemPrompt: zod.string().nullish(),
   stance: zod.string(),
   influenceScore: zod.number(),
   credibilityScore: zod.number(),
@@ -146,6 +148,7 @@ export const UpdateAgentResponse = zod.object({
   region: zod.string(),
   occupation: zod.string(),
   persona: zod.string(),
+  systemPrompt: zod.string().nullish(),
   stance: zod.string(),
   influenceScore: zod.number(),
   credibilityScore: zod.number(),
@@ -184,6 +187,7 @@ export const GetAgentNeighborhoodResponse = zod.object({
     region: zod.string(),
     occupation: zod.string(),
     persona: zod.string(),
+    systemPrompt: zod.string().nullish(),
     stance: zod.string(),
     influenceScore: zod.number(),
     credibilityScore: zod.number(),
@@ -208,6 +212,7 @@ export const GetAgentNeighborhoodResponse = zod.object({
         region: zod.string(),
         occupation: zod.string(),
         persona: zod.string(),
+        systemPrompt: zod.string().nullish(),
         stance: zod.string(),
         influenceScore: zod.number(),
         credibilityScore: zod.number(),
@@ -258,6 +263,12 @@ export const ListSimulationsResponseItem = zod.object({
     numRounds: zod.number(),
     agentCount: zod.number(),
     policyId: zod.number().nullish(),
+    groupIds: zod
+      .array(zod.number())
+      .nullish()
+      .describe(
+        "Clone pool agents from these groups into the new simulation (ignores template agentCount).",
+      ),
   }),
   createdAt: zod.coerce.date(),
 });
@@ -274,6 +285,12 @@ export const CreateSimulationBody = zod.object({
     numRounds: zod.number(),
     agentCount: zod.number(),
     policyId: zod.number().nullish(),
+    groupIds: zod
+      .array(zod.number())
+      .nullish()
+      .describe(
+        "Clone pool agents from these groups into the new simulation (ignores template agentCount).",
+      ),
   }),
 });
 
@@ -297,6 +314,12 @@ export const GetSimulationResponse = zod.object({
     numRounds: zod.number(),
     agentCount: zod.number(),
     policyId: zod.number().nullish(),
+    groupIds: zod
+      .array(zod.number())
+      .nullish()
+      .describe(
+        "Clone pool agents from these groups into the new simulation (ignores template agentCount).",
+      ),
   }),
   createdAt: zod.coerce.date(),
 });
@@ -467,6 +490,11 @@ export const ListGroupsResponseItem = zod.object({
   id: zod.number(),
   name: zod.string(),
   description: zod.string(),
+  cohortSpec: zod.record(zod.string(), zod.unknown()),
+  poolAgentCount: zod
+    .number()
+    .optional()
+    .describe("Agents in this group not yet assigned to a simulation (pool)."),
   createdAt: zod.coerce.date(),
 });
 export const ListGroupsResponse = zod.array(ListGroupsResponseItem);
@@ -477,6 +505,20 @@ export const ListGroupsResponse = zod.array(ListGroupsResponseItem);
 export const CreateGroupBody = zod.object({
   name: zod.string(),
   description: zod.string(),
+});
+
+/**
+ * @summary Create a group and LLM-generated pool agents
+ */
+export const createGroupWithAgentsBodyAgentCountMax = 500;
+
+export const CreateGroupWithAgentsBody = zod.object({
+  name: zod.string(),
+  description: zod.string().optional(),
+  agentCount: zod.number().min(1).max(createGroupWithAgentsBodyAgentCountMax),
+  demographics: zod.string(),
+  community: zod.string(),
+  educationProfession: zod.string(),
 });
 
 /**

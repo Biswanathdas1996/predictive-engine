@@ -11,6 +11,7 @@ export type ServiceStatusLlmBackend =
   | null;
 
 export const ServiceStatusLlmBackend = {
+  pwc_genai: "pwc_genai",
   ollama: "ollama",
   openai_compatible: "openai_compatible",
 } as const;

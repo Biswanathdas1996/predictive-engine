@@ -58,3 +58,6 @@ venv/
 .env
 .env.local
 .env.*.local
+local_secrets.py
+secrets.dotenv
+pwc_genai_local.py

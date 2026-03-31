@@ -10,9 +10,9 @@ export const commentsTable = pgTable("comments", {
   content: text("content").notNull(),
   sentiment: real("sentiment").notNull().default(0),
   round: integer("round").notNull().default(0),
-  agentId: integer("agent_id").notNull().references(() => agentsTable.id),
-  postId: integer("post_id").notNull().references(() => postsTable.id),
-  simulationId: integer("simulation_id").notNull().references(() => simulationsTable.id),
+  agentId: integer("agent_id").notNull().references(() => agentsTable.id, { onDelete: "cascade" }),
+  postId: integer("post_id").notNull().references(() => postsTable.id, { onDelete: "cascade" }),
+  simulationId: integer("simulation_id").notNull().references(() => simulationsTable.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

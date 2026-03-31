@@ -13,12 +13,17 @@ if (Number.isNaN(port) || port <= 0) {
 
 const basePath = process.env.BASE_PATH ?? "/";
 
+/** Replit modal often shows "(unknown runtime error)" on local Windows/macOS; only enable on Replit. */
+const useReplitRuntimeOverlay =
+  process.env.REPL_ID !== undefined &&
+  process.env.VITE_DISABLE_REPLIT_ERROR_OVERLAY !== "1";
+
 export default defineConfig({
   base: basePath,
   plugins: [
     react(),
     tailwindcss(),
-    runtimeErrorOverlay(),
+    ...(useReplitRuntimeOverlay ? [runtimeErrorOverlay()] : []),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [
@@ -49,6 +54,7 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
+    hmr: { overlay: false },
     proxy: {
       "/api": {
         target: `http://127.0.0.1:${process.env.API_PORT ?? "3000"}`,

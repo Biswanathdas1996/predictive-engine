@@ -25,6 +25,7 @@ def agent_row(r: asyncpg.Record) -> dict[str, Any]:
         "region": r["region"],
         "occupation": r["occupation"],
         "persona": r["persona"],
+        "systemPrompt": r.get("system_prompt"),
         "stance": r["stance"],
         "influenceScore": float(r["influence_score"]),
         "credibilityScore": float(r["credibility_score"]),
@@ -117,12 +118,21 @@ def policy_row(
 
 
 def group_row(r: asyncpg.Record) -> dict[str, Any]:
-    return {
+    cs = r.get("cohort_spec") or {}
+    if isinstance(cs, str):
+        cs = json.loads(cs)
+    if cs is None:
+        cs = {}
+    out: dict[str, Any] = {
         "id": r["id"],
         "name": r["name"],
         "description": r["description"],
+        "cohortSpec": cs,
         "createdAt": _dt(r["created_at"]),
     }
+    if "pool_agent_count" in r.keys():
+        out["poolAgentCount"] = int(r["pool_agent_count"])
+    return out
 
 
 def event_row(r: asyncpg.Record) -> dict[str, Any]:
