@@ -1,4 +1,13 @@
-import { pgTable, text, serial, timestamp, integer, real, jsonb } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  text,
+  serial,
+  timestamp,
+  integer,
+  real,
+  jsonb,
+  boolean,
+} from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 import { groupsTable } from "./groups";
@@ -25,6 +34,8 @@ export const agentsTable = pgTable("agents", {
   activityLevel: real("activity_level").notNull().default(0.5),
   groupId: integer("group_id").references(() => groupsTable.id, { onDelete: "set null" }),
   simulationId: integer("simulation_id").references(() => simulationsTable.id, { onDelete: "cascade" }),
+  /** When true, this row is the human facilitator for user-injected thread replies (not a simulated agent). */
+  isFacilitator: boolean("is_facilitator").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

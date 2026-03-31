@@ -303,6 +303,83 @@ paths:
                 items:
                   $ref: "#/components/schemas/Post"
 
+  /simulations/{id}/posts/{postId}/user-reply:
+    post:
+      operationId: userReplyToSimulationPost
+      tags: [simulations]
+      summary: Human reply on a post with mandatory agent follow-ups
+      description: >-
+        Inserts your comment on the thread, then generates one reply comment per linked simulated agent
+        (the post author plus every agent who has already commented on this post). Requires PwC GenAI.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: postId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPostReplyBody"
+      responses:
+        "200":
+          description: Your comment plus agent replies
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserPostReplyResponse"
+        "400":
+          description: Invalid body or thread state
+        "404":
+          description: Simulation or post not found
+        "503":
+          description: GenAI unavailable
+
+  /simulations/{id}/posts/{postId}/user-reply-stream:
+    post:
+      operationId: userReplyToSimulationPostStream
+      tags: [simulations]
+      summary: Human reply on a post with streamed agent follow-ups (SSE)
+      description: >-
+        Same as user-reply but responds with text/event-stream. Emits user_comment, status, agent_reply
+        events as each linked agent finishes, then complete. On validation or server errors, emits a single
+        error event (message field). Requires PwC GenAI.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: postId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserPostReplyBody"
+      responses:
+        "200":
+          description: SSE stream (text/event-stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "400":
+          description: Invalid body
+        "404":
+          description: Simulation or post not found
+
   /simulations/{id}/graph:
     get:
       operationId: getSimulationGraph
@@ -1041,6 +1118,9 @@ components:
           type: string
         agentOccupation:
           type: string
+        isFacilitator:
+          type: boolean
+          description: True when the comment author is the human facilitator agent ("You")
       required:
         - id
         - content
@@ -1050,6 +1130,34 @@ components:
         - agentName
         - postId
         - simulationId
+
+    UserPostReplyBody:
+      type: object
+      properties:
+        content:
+          type: string
+          minLength: 1
+          maxLength: 4000
+      required:
+        - content
+
+    UserPostReplyResponse:
+      type: object
+      properties:
+        userComment:
+          $ref: "#/components/schemas/GraphComment"
+        agentReplies:
+          type: array
+          items:
+            $ref: "#/components/schemas/GraphComment"
+        respondentAgentIds:
+          type: array
+          items:
+            type: integer
+      required:
+        - userComment
+        - agentReplies
+        - respondentAgentIds
 
     SimulationGraphNode:
       type: object

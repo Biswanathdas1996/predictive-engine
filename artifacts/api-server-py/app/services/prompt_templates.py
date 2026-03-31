@@ -516,3 +516,37 @@ STEP 4 — ROUND-SPECIFIC RULES
 
 Reply with ONLY a valid JSON array — no markdown, no code fences, no explanation:
 [{{"agent_id":<int>,"action":"post"|"comment","target_post_id":<int or null>,"directive":"<specific 1-3 sentence instruction>"}}]"""
+
+
+def build_user_thread_reply_prompt(
+    *,
+    post_content: str,
+    post_author_name: str,
+    user_comment: str,
+    persona: dict[str, Any],
+    belief_state: dict[str, Any],
+    policy_brief: str | None = None,
+    event_line: str | None = None,
+) -> str:
+    """Prompt for a simulated agent who MUST reply on-thread to a human facilitator comment."""
+    p = persona
+    bs = belief_state
+    policy_block = f"\nPOLICY CONTEXT (stay on topic):\n{policy_brief}\n" if policy_brief else ""
+    event_block = f"\nExternal event context: {event_line}\n" if event_line else ""
+    beh = ""
+    sp = p.get("systemPrompt")
+    if sp:
+        beh = f" Domain expertise (apply): {sp}"
+    return f"""You are {p["name"]}, {p["age"]}y, {p["occupation"]} in {p["region"]}. Stance: {p["stance"]}. {p["persona"]}.{beh}
+Beliefs: policy={bs["policySupport"]:.2f} trust={bs["trustInGovernment"]:.2f} econ={bs["economicOutlook"]:.2f}
+{policy_block}{event_block}
+THREAD — Original post by {post_author_name}:
+"{post_content}"
+
+A human facilitator (labeled "You" in the UI) just replied on this same thread:
+"{user_comment}"
+
+You MUST respond directly to what the facilitator said — agree, disagree, clarify, or ask a follow-up — in character.
+Stay under 280 characters. This is a comment on the SAME post (thread), not a new top-level post.
+
+Reply JSON only: {{"action":"comment","content":"...","sentiment":<-1 to 1>}}"""

@@ -126,6 +126,11 @@ async def sync_agent_to_graph(agent: dict[str, Any]) -> None:
     belief = agent.get("beliefState") or agent.get("belief_state") or {}
     if isinstance(belief, str):
         belief = json.loads(belief)
+    is_fac = bool(
+        agent.get("isFacilitator")
+        if "isFacilitator" in agent
+        else agent.get("is_facilitator", False)
+    )
     await _run(
         """MERGE (a:Agent {agent_id: $agentId})
        SET a.name = $name,
@@ -139,7 +144,8 @@ async def sync_agent_to_graph(agent: dict[str, Any]) -> None:
            a.credibility_score = $credibilityScore,
            a.belief_state = $beliefState,
            a.confidence_level = $confidenceLevel,
-           a.activity_level = $activityLevel""",
+           a.activity_level = $activityLevel,
+           a.is_facilitator = $isFacilitator""",
         {
             "agentId": str(agent["id"]),
             "name": agent["name"],
@@ -162,6 +168,7 @@ async def sync_agent_to_graph(agent: dict[str, Any]) -> None:
             "activityLevel": agent["activityLevel"]
             if "activityLevel" in agent
             else agent.get("activity_level"),
+            "isFacilitator": is_fac,
         },
     )
     sim_id = agent.get("simulationId") or agent.get("simulation_id")
@@ -310,6 +317,7 @@ async def read_agents_from_graph(simulation_id: int) -> list[dict[str, Any]]:
     """Read all agents for a simulation from Neo4j."""
     rows = await _read(
         """MATCH (a:Agent)-[:PART_OF]->(s:Simulation {simulation_id: $simId})
+           WHERE coalesce(a.is_facilitator, false) = false
            RETURN a.agent_id   AS id,
                   a.name       AS name,
                   a.age        AS age,

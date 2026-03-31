@@ -284,6 +284,7 @@ function AgentDemographicChips({
 
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimulationNetworkPanel } from "@/components/SimulationNetworkPanel";
 import { consumeSSEStream, type SSEEvent } from "@/lib/sse";
@@ -411,8 +412,77 @@ export default function SimulationDetail() {
   const [beliefDecodeLoading, setBeliefDecodeLoading] = useState(false);
   const [beliefDecodeError, setBeliefDecodeError] = useState<string | null>(null);
   const [beliefDecodeReport, setBeliefDecodeReport] = useState<string | null>(null);
+  const [userReplyDrafts, setUserReplyDrafts] = useState<Record<number, string>>({});
+  const [userReplySendingPostId, setUserReplySendingPostId] = useState<number | null>(null);
+  const [userReplyStreamMessage, setUserReplyStreamMessage] = useState("");
   const abortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+
+  const submitUserPostReply = useCallback(
+    async (postId: number, content: string) => {
+      const trimmed = content.trim();
+      if (!Number.isFinite(id) || id <= 0 || !trimmed) return;
+      const commentsKey = [`/api/simulations/${id}/comments`] as const;
+      setUserReplySendingPostId(postId);
+      setUserReplyStreamMessage("Posting your reply…");
+
+      const mergeComment = (comment: GraphComment) => {
+        queryClient.setQueryData<GraphComment[]>(commentsKey, (prev) => {
+          const list = prev ? [...prev] : [];
+          if (list.some((c) => c.id === comment.id)) return list;
+          return [...list, comment];
+        });
+      };
+
+      await consumeSSEStream({
+        url: `/api/simulations/${id}/posts/${postId}/user-reply-stream`,
+        body: { content: trimmed },
+        onEvent: (event: SSEEvent) => {
+          if (!mountedRef.current) return;
+          if (event.type === "user_comment") {
+            const c = (event as SSEEvent & { comment?: GraphComment }).comment;
+            if (c && typeof c.id === "number") mergeComment(c);
+            setUserReplyDrafts((prev) => ({ ...prev, [postId]: "" }));
+            return;
+          }
+          if (event.type === "agent_reply") {
+            const c = (event as SSEEvent & { comment?: GraphComment }).comment;
+            if (c && typeof c.id === "number") mergeComment(c);
+            return;
+          }
+          if (event.type === "status") {
+            const msg = (event as SSEEvent & { message?: string }).message;
+            if (typeof msg === "string" && msg.length > 0) setUserReplyStreamMessage(msg);
+            return;
+          }
+          if (event.type === "complete") {
+            const ev = event as SSEEvent & { agentReplies?: GraphComment[] };
+            const n = Array.isArray(ev.agentReplies) ? ev.agentReplies.length : 0;
+            toast({
+              title: "Reply posted",
+              description: `${n} linked agent${n === 1 ? "" : "s"} responded to your message.`,
+            });
+            void queryClient.invalidateQueries({ queryKey: [`/api/simulations/${id}/graph`] });
+          }
+        },
+        onError: (msg) => {
+          if (!mountedRef.current) return;
+          toast({
+            variant: "destructive",
+            title: "Could not post reply",
+            description: msg || "Try again.",
+          });
+        },
+        onDone: () => {
+          if (!mountedRef.current) return;
+          setUserReplySendingPostId(null);
+          setUserReplyStreamMessage("");
+          void queryClient.invalidateQueries({ queryKey: [...commentsKey] });
+        },
+      });
+    },
+    [id, queryClient],
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -1218,6 +1288,7 @@ export default function SimulationDetail() {
                                 </div>
                                 <ul className="m-0 list-none flex flex-col gap-2 p-2.5 sm:gap-2.5 sm:p-3">
                                   {replies.map((reply) => {
+                                    const isFacilitatorReply = reply.isFacilitator === true;
                                     const replyMood =
                                       reply.sentiment > 0.15
                                         ? "positive"
@@ -1237,11 +1308,17 @@ export default function SimulationDetail() {
                                             <div
                                               className={cn(
                                                 "flex h-9 w-9 items-center justify-center rounded-xl text-[10px] font-bold tracking-tight text-white shadow-sm ring-2 ring-background/90",
-                                                avatarGradientClass(reply.agentId),
+                                                isFacilitatorReply
+                                                  ? "bg-gradient-to-br from-primary to-primary/70"
+                                                  : avatarGradientClass(reply.agentId),
                                               )}
                                               aria-hidden
                                             >
-                                              <AgentGenderAvatarIcon gender={reply.agentGender} size={18} />
+                                              {isFacilitatorReply ? (
+                                                <User className="h-4 w-4 text-primary-foreground" strokeWidth={2} />
+                                              ) : (
+                                                <AgentGenderAvatarIcon gender={reply.agentGender} size={18} />
+                                              )}
                                             </div>
                                             <span
                                               className="absolute -bottom-0.5 -right-0.5 flex h-5 w-5 items-center justify-center rounded-md border border-border/40 bg-card text-primary shadow-sm ring-2 ring-background dark:bg-card/95"
@@ -1272,34 +1349,43 @@ export default function SimulationDetail() {
                                                     />
                                                     R{reply.round}
                                                   </span>
-                                                  <span
-                                                    className={cn(
-                                                      "inline-flex items-center gap-0.5 rounded-md border px-1.5 py-px text-[10px] font-semibold tabular-nums",
-                                                      replyMood === "positive" &&
-                                                        "border-emerald-500/20 bg-emerald-500/[0.08] text-emerald-800 dark:text-emerald-300",
-                                                      replyMood === "negative" &&
-                                                        "border-destructive/20 bg-destructive/[0.08] text-destructive",
-                                                      replyMood === "neutral" &&
-                                                        "border-border/40 bg-muted/25 text-muted-foreground dark:bg-muted/15",
-                                                    )}
-                                                  >
-                                                    <ReplyMoodIcon
-                                                      className="h-2.5 w-2.5 shrink-0 opacity-90"
-                                                      strokeWidth={2.5}
-                                                      aria-hidden
-                                                    />
-                                                    {formatScore(reply.sentiment)}
-                                                  </span>
+                                                  {isFacilitatorReply ? (
+                                                    <span className="inline-flex items-center gap-0.5 rounded-md border border-primary/20 bg-primary/[0.08] px-1.5 py-px text-[10px] font-semibold text-primary dark:bg-primary/[0.12]">
+                                                      <UserRound className="h-2.5 w-2.5 shrink-0 opacity-90" strokeWidth={2} aria-hidden />
+                                                      You
+                                                    </span>
+                                                  ) : (
+                                                    <span
+                                                      className={cn(
+                                                        "inline-flex items-center gap-0.5 rounded-md border px-1.5 py-px text-[10px] font-semibold tabular-nums",
+                                                        replyMood === "positive" &&
+                                                          "border-emerald-500/20 bg-emerald-500/[0.08] text-emerald-800 dark:text-emerald-300",
+                                                        replyMood === "negative" &&
+                                                          "border-destructive/20 bg-destructive/[0.08] text-destructive",
+                                                        replyMood === "neutral" &&
+                                                          "border-border/40 bg-muted/25 text-muted-foreground dark:bg-muted/15",
+                                                      )}
+                                                    >
+                                                      <ReplyMoodIcon
+                                                        className="h-2.5 w-2.5 shrink-0 opacity-90"
+                                                        strokeWidth={2.5}
+                                                        aria-hidden
+                                                      />
+                                                      {formatScore(reply.sentiment)}
+                                                    </span>
+                                                  )}
                                                 </div>
                                               </div>
-                                              <AgentDemographicChips
-                                                variant="inline"
-                                                agentAge={reply.agentAge}
-                                                agentGender={reply.agentGender}
-                                                agentRegion={reply.agentRegion}
-                                                agentOccupation={reply.agentOccupation}
-                                                ariaLabel="Reply author demographics"
-                                              />
+                                              {!isFacilitatorReply ? (
+                                                <AgentDemographicChips
+                                                  variant="inline"
+                                                  agentAge={reply.agentAge}
+                                                  agentGender={reply.agentGender}
+                                                  agentRegion={reply.agentRegion}
+                                                  agentOccupation={reply.agentOccupation}
+                                                  ariaLabel="Reply author demographics"
+                                                />
+                                              ) : null}
                                             </div>
                                             <p className="mt-2 text-[13px] leading-snug text-foreground/95 whitespace-pre-wrap [text-wrap:pretty] sm:text-[13.5px] sm:leading-relaxed">
                                               {reply.content}
@@ -1314,28 +1400,139 @@ export default function SimulationDetail() {
                             ) : null}
 
                             <footer
-                              className="mt-4 flex items-center justify-between border-t border-border/35 pt-3 text-muted-foreground"
+                              className="mt-4 flex flex-col gap-0 border-t border-border/30 pt-3 text-muted-foreground"
                               role="group"
                               aria-label="Post actions"
                             >
-                              <span
-                                className="inline-flex items-center gap-2 rounded-lg px-2 py-1.5 text-[13px] font-medium text-foreground/75"
-                                title="Replies in this simulation thread"
-                              >
-                                <MessageCircle className="h-[18px] w-[18px] opacity-70" strokeWidth={1.75} />
-                                <span className="tabular-nums">{replies.length}</span>
-                              </span>
-                              <span className="inline-flex items-center gap-0.5 opacity-50">
-                                <span className="inline-flex rounded-full p-2" title="Not available in simulation">
-                                  <Repeat2 className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                                </span>
-                                <span className="inline-flex rounded-full p-2" title="Not available in simulation">
-                                  <Heart className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                                </span>
-                                <span className="inline-flex rounded-full p-2" title="Not available in simulation">
-                                  <Share2 className="h-[18px] w-[18px]" strokeWidth={1.75} />
-                                </span>
-                              </span>
+                              <div className="flex items-center justify-between gap-2 pb-3">
+                                <div
+                                  className="inline-flex min-w-0 items-center gap-2 text-[13px] text-muted-foreground"
+                                  title="Replies in this simulation thread"
+                                >
+                                  <span className="inline-flex h-9 min-w-[2.25rem] items-center justify-center gap-1.5 rounded-full px-1 font-medium tabular-nums text-foreground/85 sm:px-2">
+                                    <MessageCircle
+                                      className="h-[18px] w-[18px] shrink-0 text-muted-foreground"
+                                      strokeWidth={1.75}
+                                      aria-hidden
+                                    />
+                                    <span>{replies.length}</span>
+                                    <span className="hidden font-normal text-muted-foreground sm:inline">
+                                      {replies.length === 1 ? "reply" : "replies"}
+                                    </span>
+                                  </span>
+                                </div>
+                                <div className="flex shrink-0 items-center gap-0.5">
+                                  {(
+                                    [
+                                      { Icon: Repeat2, label: "Repost — not available in simulation" },
+                                      { Icon: Heart, label: "Like — not available in simulation" },
+                                      { Icon: Share2, label: "Share — not available in simulation" },
+                                    ] as const
+                                  ).map(({ Icon, label }) => (
+                                    <button
+                                      key={label}
+                                      type="button"
+                                      disabled
+                                      aria-label={label}
+                                      title="Not available in simulation"
+                                      className="inline-flex h-9 w-9 items-center justify-center rounded-full text-muted-foreground/45 transition-colors hover:bg-muted/50 disabled:cursor-not-allowed disabled:opacity-40"
+                                    >
+                                      <Icon className="h-[18px] w-[18px]" strokeWidth={1.75} aria-hidden />
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div className="rounded-2xl border border-border/45 bg-gradient-to-b from-muted/[0.2] to-muted/[0.06] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] dark:from-muted/15 dark:to-muted/5 dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.04)] sm:p-4">
+                                <label className="sr-only" htmlFor={`user-reply-${post.id}`}>
+                                  Your reply to this post
+                                </label>
+                                <div className="flex gap-3">
+                                  <div
+                                    className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/12 ring-2 ring-background dark:bg-primary/18"
+                                    aria-hidden
+                                  >
+                                    <UserRound className="h-5 w-5 text-primary" strokeWidth={1.75} />
+                                  </div>
+                                  <div className="min-w-0 flex-1 space-y-2">
+                                    <Textarea
+                                      id={`user-reply-${post.id}`}
+                                      value={userReplyDrafts[post.id] ?? ""}
+                                      onChange={(e) =>
+                                        setUserReplyDrafts((prev) => ({ ...prev, [post.id]: e.target.value }))
+                                      }
+                                      placeholder="Add to the conversation…"
+                                      rows={3}
+                                      disabled={userReplySendingPostId !== null}
+                                      className="min-h-[5rem] resize-y rounded-xl border-0 bg-background/70 px-3 py-2.5 text-[15px] leading-relaxed shadow-none placeholder:text-muted-foreground/55 focus-visible:ring-2 focus-visible:ring-primary/25 dark:bg-background/40 sm:text-sm"
+                                    />
+                                    {userReplySendingPostId === post.id && userReplyStreamMessage ? (
+                                      <p
+                                        className="text-xs leading-snug text-muted-foreground sm:text-right"
+                                        role="status"
+                                        aria-live="polite"
+                                      >
+                                        {userReplyStreamMessage}
+                                      </p>
+                                    ) : null}
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                                      <p className="flex items-start gap-1.5 text-[11px] leading-snug text-muted-foreground/90 sm:max-w-[min(100%,28rem)]">
+                                        <Info
+                                          className="mt-0.5 h-3.5 w-3.5 shrink-0 opacity-70"
+                                          strokeWidth={2}
+                                          aria-hidden
+                                        />
+                                        <span>
+                                          The author and everyone who already replied will get a follow-up (PwC
+                                          GenAI).
+                                        </span>
+                                      </p>
+                                      <div className="flex shrink-0 flex-wrap items-center justify-end gap-2 sm:pt-0">
+                                        <Button
+                                          type="button"
+                                          variant="ghost"
+                                          size="sm"
+                                          className="h-9 rounded-full px-4 text-muted-foreground hover:text-foreground"
+                                          disabled={userReplySendingPostId !== null}
+                                          onClick={() =>
+                                            setUserReplyDrafts((prev) => ({ ...prev, [post.id]: "" }))
+                                          }
+                                        >
+                                          Cancel
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          className="h-9 rounded-full px-5 font-semibold shadow-sm"
+                                          disabled={
+                                            userReplySendingPostId !== null ||
+                                            !(userReplyDrafts[post.id] ?? "").trim()
+                                          }
+                                          onClick={() =>
+                                            void submitUserPostReply(post.id, userReplyDrafts[post.id] ?? "")
+                                          }
+                                        >
+                                          {userReplySendingPostId === post.id ? (
+                                            <>
+                                              <RefreshCw
+                                                className="mr-2 h-3.5 w-3.5 animate-spin"
+                                                strokeWidth={2}
+                                                aria-hidden
+                                              />
+                                              Sending…
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Reply className="mr-2 h-3.5 w-3.5" strokeWidth={2} aria-hidden />
+                                              Reply
+                                            </>
+                                          )}
+                                        </Button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
                             </footer>
                           </div>
                         </div>

@@ -47,6 +47,7 @@ from app.services.simulation_engine import (
     run_simulation_round,
     run_simulation_round_stream,
 )
+from app.services.user_post_reply import apply_user_post_reply, apply_user_post_reply_stream
 
 
 def _sse(data: dict) -> str:
@@ -322,7 +323,8 @@ async def list_simulations(
         rows = await conn.fetch(
             """
             SELECT s.*,
-                   (SELECT count(*)::int FROM agents  WHERE simulation_id = s.id) AS total_agents,
+                   (SELECT count(*)::int FROM agents WHERE simulation_id = s.id
+                      AND COALESCE(is_facilitator, false) = false) AS total_agents,
                    (SELECT count(*)::int FROM posts   WHERE simulation_id = s.id) AS total_posts
             FROM simulations s
             ORDER BY s.created_at DESC
@@ -537,7 +539,8 @@ async def get_simulation(id: int) -> dict:
     async with p.acquire() as conn:
         sim = await conn.fetchrow(
             """SELECT s.*,
-                      (SELECT count(*)::int FROM agents  WHERE simulation_id = s.id) AS total_agents,
+                      (SELECT count(*)::int FROM agents WHERE simulation_id = s.id
+                         AND COALESCE(is_facilitator, false) = false) AS total_agents,
                       (SELECT count(*)::int FROM posts   WHERE simulation_id = s.id) AS total_posts
                FROM simulations s WHERE s.id = $1""",
             id,
@@ -716,6 +719,53 @@ async def get_simulation_posts(
         "limit": limit,
         "offset": offset,
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /simulations/{id}/posts/{postId}/user-reply
+# ---------------------------------------------------------------------------
+@router.post("/simulations/{id}/posts/{postId}/user-reply")
+async def user_reply_to_simulation_post(id: int, postId: int, body: dict) -> dict:
+    raw = body.get("content")
+    if not isinstance(raw, str):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "content must be a non-empty string"},
+        )
+    try:
+        return await apply_user_post_reply(id, postId, raw)
+    except ValueError as e:
+        msg = str(e)
+        low = msg.lower()
+        if "not found" in low:
+            raise HTTPException(status_code=404, detail={"error": msg}) from e
+        raise HTTPException(status_code=400, detail={"error": msg}) from e
+
+
+# ---------------------------------------------------------------------------
+# POST /simulations/{id}/posts/{postId}/user-reply-stream  —  SSE (incremental agent replies)
+# ---------------------------------------------------------------------------
+@router.post("/simulations/{id}/posts/{postId}/user-reply-stream")
+async def user_reply_to_simulation_post_stream(id: int, postId: int, body: dict) -> StreamingResponse:
+    raw = body.get("content")
+    if not isinstance(raw, str):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "content must be a non-empty string"},
+        )
+
+    async def event_stream() -> AsyncIterator[str]:
+        try:
+            async for event in apply_user_post_reply_stream(id, postId, raw):
+                yield _sse(event)
+        except ValueError as e:
+            logger.warning("user-reply-stream validation failed: %s", e)
+            yield _sse({"type": "error", "message": str(e)})
+        except Exception as exc:
+            logger.exception("user-reply-stream failed for simulation %s post %s", id, postId)
+            yield _sse({"type": "error", "message": str(exc)})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=_SSE_HEADERS)
 
 
 # ---------------------------------------------------------------------------

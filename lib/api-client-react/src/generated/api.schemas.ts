@@ -206,6 +206,14 @@ export interface GraphComment {
   agentGender?: string;
   agentRegion?: string;
   agentOccupation?: string;
+  /** True when the author is the human facilitator ("You") */
+  isFacilitator?: boolean;
+}
+
+export interface UserPostReplyResponse {
+  userComment: GraphComment;
+  agentReplies: GraphComment[];
+  respondentAgentIds: number[];
 }
 
 export interface SimulationGraphNode {

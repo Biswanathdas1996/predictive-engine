@@ -527,7 +527,9 @@ async def run_simulation_round(simulation_id: int) -> dict[str, Any]:
                 influences = await neo4j_service.read_influences_from_graph(agent_ids)
             else:
                 agents = await conn.fetch(
-                    "SELECT * FROM agents WHERE simulation_id = $1", simulation_id
+                    """SELECT * FROM agents WHERE simulation_id = $1
+                       AND COALESCE(is_facilitator, false) = false""",
+                    simulation_id,
                 )
                 if not agents:
                     raise ValueError("No agents in this simulation")
@@ -1113,7 +1115,9 @@ async def run_simulation_round_stream(
                 influences = await neo4j_service.read_influences_from_graph(agent_ids)
             else:
                 agents = await conn.fetch(
-                    "SELECT * FROM agents WHERE simulation_id = $1", simulation_id
+                    """SELECT * FROM agents WHERE simulation_id = $1
+                       AND COALESCE(is_facilitator, false) = false""",
+                    simulation_id,
                 )
                 if not agents:
                     yield {"type": "error", "message": "No agents in this simulation"}
@@ -1862,7 +1866,9 @@ async def run_monte_carlo(
             influences = await neo4j_service.read_influences_from_graph(agent_ids)
         else:
             agents = await conn.fetch(
-                "SELECT * FROM agents WHERE simulation_id = $1", simulation_id
+                """SELECT * FROM agents WHERE simulation_id = $1
+                   AND COALESCE(is_facilitator, false) = false""",
+                simulation_id,
             )
             agent_ids = [a["id"] for a in agents]
             influences = (
@@ -2049,7 +2055,9 @@ async def run_monte_carlo_stream(
             influences = await neo4j_service.read_influences_from_graph(agent_ids)
         else:
             agents = await conn.fetch(
-                "SELECT * FROM agents WHERE simulation_id = $1", simulation_id
+                """SELECT * FROM agents WHERE simulation_id = $1
+                   AND COALESCE(is_facilitator, false) = false""",
+                simulation_id,
             )
             agent_ids = [a["id"] for a in agents]
             influences = (

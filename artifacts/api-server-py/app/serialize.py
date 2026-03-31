@@ -97,7 +97,7 @@ def agent_row(r: asyncpg.Record) -> dict[str, Any]:
             "Stay consistently in this voice; ground reactions in your role and lived context."
         )[:4000]
 
-    return {
+    out: dict[str, Any] = {
         "id": r["id"],
         "name": r["name"],
         "age": age,
@@ -116,6 +116,9 @@ def agent_row(r: asyncpg.Record) -> dict[str, Any]:
         "simulationId": r["simulation_id"],
         "createdAt": _dt(r["created_at"]),
     }
+    if r.get("is_facilitator") is not None:
+        out["isFacilitator"] = bool(r["is_facilitator"])
+    return out
 
 
 def simulation_row(
@@ -191,6 +194,8 @@ def comment_row(
         out["agentGender"] = gender
         out["agentRegion"] = region
         out["agentOccupation"] = occupation
+        if agent.get("is_facilitator") is not None:
+            out["isFacilitator"] = bool(agent["is_facilitator"])
     return out
 
 
