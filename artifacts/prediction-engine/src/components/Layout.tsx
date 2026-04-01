@@ -100,15 +100,32 @@ export function Layout({ children }: { children: ReactNode }) {
             aria-hidden
           />
         </div>
-        <div className="relative flex-1 overflow-y-auto scroll-smooth z-10 p-4 pb-8 sm:p-6 md:p-8 md:pb-10">
+        <div className="relative flex-1 overflow-y-auto scroll-smooth z-10 p-4 pb-10 sm:p-6 md:p-8 md:pb-12">
           <div
-            className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-gradient-to-b from-primary/[0.08] via-primary/[0.02] to-transparent"
+            className="pointer-events-none absolute inset-x-0 top-0 h-48 bg-gradient-to-b from-primary/[0.1] via-primary/[0.03] to-transparent"
             aria-hidden
           />
-          <div className="relative mx-auto w-full max-w-7xl rounded-2xl border border-border/50 bg-card/[0.35] shadow-[0_0_0_1px_hsl(var(--foreground)_/_0.03),0_24px_80px_-32px_rgba(0,0,0,0.55)] backdrop-blur-xl ring-1 ring-primary/[0.06]">
-            <div className="pointer-events-none absolute inset-0 rounded-2xl bg-gradient-to-br from-primary/[0.04] via-transparent to-accent/[0.05]" aria-hidden />
-            <div className="relative px-5 py-8 sm:px-8 sm:py-10 md:px-10 md:py-12">
-              {children}
+          <div className="relative mx-auto w-full max-w-7xl">
+            <div
+              className="absolute -inset-px rounded-[1.75rem] bg-gradient-to-b from-primary/25 via-transparent to-accent/15 opacity-60 blur-sm"
+              aria-hidden
+            />
+            <div className="relative overflow-hidden rounded-[1.75rem] border border-white/[0.08] bg-card/[0.28] shadow-[0_0_0_1px_hsl(var(--foreground)_/_0.04),0_32px_96px_-40px_rgba(0,0,0,0.65),inset_0_1px_0_hsl(var(--foreground)_/_0.06)] backdrop-blur-2xl">
+              <div
+                className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-primary/40 to-transparent"
+                aria-hidden
+              />
+              <div
+                className="pointer-events-none absolute inset-0 rounded-[1.75rem] bg-[radial-gradient(ellipse_90%_50%_at_50%_-30%,hsl(var(--primary)_/_0.14),transparent_55%)]"
+                aria-hidden
+              />
+              <div
+                className="pointer-events-none absolute inset-0 rounded-[1.75rem] bg-gradient-to-br from-primary/[0.05] via-transparent to-accent/[0.06]"
+                aria-hidden
+              />
+              <div className="relative px-6 py-9 sm:px-9 sm:py-11 md:px-12 md:py-14">
+                {children}
+              </div>
             </div>
           </div>
         </div>
